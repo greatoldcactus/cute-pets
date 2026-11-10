@@ -37,6 +37,7 @@ async function waitForHealth(url, timeoutMs = 20000) {
   throw new Error(`server did not start: ${url}`);
 }
 const LOG_FILE = path.join(os.homedir(), ".cute-pets", "brain.log");
+const HIDDEN_FILE = path.join(os.homedir(), ".cute-pets", "hidden.json");
 const log = (...a) => {
   const line = `[${new Date().toISOString()}] ${a.join(" ")}`;
   console.log(line);
@@ -70,6 +71,33 @@ class Hub {
     this.clients = new Map();
     this.credentials = new Map(); // url -> password (never exposed in snapshots)
     this.permissionTimer = null;
+    // Sessions the pet should not show. Local only: nothing is deleted in OpenCode.
+    try {
+      const raw = JSON.parse(fs.readFileSync(HIDDEN_FILE, "utf8"));
+      store.loadHidden(Array.isArray(raw) ? raw : raw?.hidden);
+    } catch {}
+  }
+
+  #saveHidden() {
+    try {
+      fs.mkdirSync(path.dirname(HIDDEN_FILE), { recursive: true });
+      fs.writeFileSync(HIDDEN_FILE, JSON.stringify(this.store.hiddenList(), null, 2));
+    } catch (e) {
+      log("could not write hidden.json:", e.message);
+    }
+  }
+
+  setHidden({ server, sessionId, hidden = true }) {
+    if (!sessionId) throw new Error("sessionId required");
+    if (hidden) {
+      const url = server || this.pickServer(null);
+      this.store.hideSession(url, sessionId);
+    } else {
+      this.store.unhideSession(sessionId);
+    }
+    this.#saveHidden();
+    this.store.touch(); // push a fresh snapshot to every face
+    return { ok: true, hidden: this.store.hiddenList().length };
   }
 
   list() {
@@ -424,6 +452,7 @@ class Hub {
     return { server: url, sessionId: id };
   }
 
+  // Destructive: removes the session in OpenCode. Not wired to any UI control.
   async closeSession({ server, sessionId }) {
     const url = this.pickServer(server);
     const entry = url && this.clients.get(url);

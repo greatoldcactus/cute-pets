@@ -341,7 +341,14 @@ function settingsHtml(){
       </div></div>
     <div class="field"><label>Config</label><div class="ssub" style="font-family:ui-monospace,monospace">~/.cute-pets/config.json</div></div>
     <div class="field"><label>Pets folder</label><div class="ssub" style="font-family:ui-monospace,monospace">~/.cute-pets/pets/</div></div>
-    <div class="field"><label>Sessions</label><div class="ssub">${state.sessions.length} tracked across ${(state.servers||[]).filter(s=>s.online).length} servers</div></div>`;
+    <div class="field"><label>Sessions</label><div class="ssub">${state.sessions.length} tracked across ${(state.servers||[]).filter(s=>s.online).length} servers</div></div>
+    <div class="field"><label>Hidden from pet</label>
+      ${(state.hidden||[]).length
+        ? (state.hidden||[]).map(x=>`<div class="srow" style="cursor:default"><div style="min-width:0;flex:1">
+             <div class="stitle">${esc(x.title)}</div><div class="ssub">hidden, still in OpenCode</div></div>
+             <button class="pbtn" data-act="s-unhide" data-sid="${esc(x.id)}">unhide</button></div>`).join("")
+        : `<div class="ssub">none - right-click a session and pick "Hide from pet"</div>`}
+    </div>`;
 }
 async function renderPetsList(){
   const el=$("#petlist"); if(!el) return;
@@ -365,6 +372,9 @@ function render(){
 
 /* ---------------- interactions ---------------- */
 document.addEventListener("click",async e=>{
+  const unh=e.target.closest("[data-act='s-unhide']");
+  if(unh){ try{ await post("/api/session/hide",{sessionId:unh.dataset.sid,hidden:false}); }catch(err){ alert(String(err)); }
+    showView("settings"); return; }
   const perm=e.target.closest("[data-perm]");
   if(perm){ try{ await post("/api/permission",{id:perm.dataset.perm,reply:perm.dataset.reply}); }catch(err){} return; }
   const row=e.target.closest("[data-session]");
@@ -621,10 +631,11 @@ ctx.addEventListener("click",async e=>{
   const sid=btn?.dataset.sid; hideCtx();
   if(act==="s-open"){ selected=sid; msgKey=""; setExpanded(true); showView("chat"); return; }
   if(act==="s-abort"){ const s=state.sessions.find(x=>x.id===sid); if(s) try{ await post("/api/abort",{server:s.server,sessionId:s.id}); }catch(err){} return; }
-  if(act==="s-close"){ const s=state.sessions.find(x=>x.id===sid); if(!s) return;
-    if(!confirm(`Close "${s.title}"?\nThis deletes the session in OpenCode.`)) return;
-    try{ await post("/api/session/close",{server:s.server,sessionId:s.id}); if(selected===sid){ selected=null; msgKey=""; } }catch(err){ alert(String(err)); }
+  if(act==="s-hide"){ const s=state.sessions.find(x=>x.id===sid); if(!s) return;
+    try{ await post("/api/session/hide",{server:s.server,sessionId:s.id,hidden:true});
+      if(selected===sid){ selected=null; msgKey=""; } }catch(err){ alert(String(err)); }
     return; }
+  if(act==="s-unhide"){ try{ await post("/api/session/hide",{sessionId:sid,hidden:false}); }catch(err){ alert(String(err)); } return; }
   if(act==="new"){ openMini(); }
   if(act==="sessions"){ setExpanded(true); showView("chat"); }
   if(act==="pets"){ setExpanded(true); showView("pets"); }
@@ -641,7 +652,7 @@ document.addEventListener("contextmenu",e=>{
     {label:"Open",act:"s-open",id:s.id},
     ...(s.state==="running"?[{label:"Stop",act:"s-abort",id:s.id}]:[]),
     "sep",
-    {label:"Close session",act:"s-close",id:s.id},
+    {label:"Hide from pet",act:"s-hide",id:s.id},
   ], e.clientX, e.clientY);
 });
 document.addEventListener("mousedown",e=>{ if(!e.target.closest("#ctx")&&!e.target.closest("#pet")) hideCtx(); });
