@@ -4,7 +4,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { readConfig, writeConfig } from "./config.mjs";
 import { PetState, STATE } from "./state.mjs";
 import { OpenCodeClient } from "./opencode.mjs";
@@ -66,12 +66,52 @@ function parseArgs(argv) {
   return out;
 }
 
+// WSL publishes its managed OpenCode 2 service - url and password - in
+// ~/.local/state/opencode/service.json. WSL2 forwards localhost, so the brain can attach
+// to it from Windows without the user copying a credential around.
+function wslServices() {
+  if (process.platform !== "win32") return [];
+  let distros = [];
+  const exe = ["wsl.exe", "C:\\Windows\\System32\\wsl.exe"];
+  for (const bin of exe) {
+    try {
+      distros = execFileSync(bin, ["-l", "-q"], { encoding: "utf8" })
+        .split(/\r?\n/).map((s) => s.replace(/\0/g, "").trim()).filter(Boolean);
+      break;
+    } catch (e) {
+      if (process.env.CUTE_PETS_WSL_DEBUG) log(`wsl ${bin}: ${e.message}`);
+    }
+  }
+  if (!distros.length) return [];
+  const found = [];
+  let scanned = 0, errs = [];
+  for (const distro of distros) {
+    const root = `//wsl.localhost/${distro}/home`;
+    let homes = [];
+    try { homes = fs.readdirSync(root); } catch (e) { errs.push(distro + ":" + e.code); continue; }
+    for (const home of homes) {
+      const file = path.join(root, home, ".local", "state", "opencode", "service.json");
+      try {
+        const meta = JSON.parse(fs.readFileSync(file, "utf8"));
+        if (!meta?.url || !meta?.password) continue;
+        const port = Number(String(meta.url).replace(/\/$/, "").split(":").pop());
+        if (!port) continue;
+        found.push({ url: `http://localhost:${port}`, password: meta.password, distro });
+      } catch (e) { errs.push(home + ":" + e.code); }
+      scanned++;
+    }
+  }
+  if (process.env.CUTE_PETS_WSL_DEBUG) log(`wsl scan: distros=${distros.length} scanned=${scanned} found=${found.length} errs=${errs.join(",")}`);
+  return found;
+}
+
 class Hub {
   constructor(store) {
     this.store = store;
     this.clients = new Map();
     this.credentials = new Map(); // url -> password (never exposed in snapshots)
     this.permissionTimer = null;
+    this.wslTried = new Map(); // url -> last attach attempt, so a dead WSL service is not retried every tick
     // Sessions the pet should not show. Local only: nothing is deleted in OpenCode.
     try {
       const raw = JSON.parse(fs.readFileSync(HIDDEN_FILE, "utf8"));
@@ -168,6 +208,27 @@ class Hub {
       const url = `http://127.0.0.1:${port}`;
       if (this.clients.has(url)) continue;
       if (await this.attach(url)) attached.push(url);
+    }
+
+    // OpenCode 2 inside WSL: its managed service file carries the credential, so v2
+    // needs no manual attach. Retried at most once a minute per URL.
+    let wsl = [];
+    try { wsl = wslServices(); } catch (e) { log("wsl scan failed:", e.message); }
+    if (wsl.length && !this.wslLogged) { this.wslLogged = true; log(`WSL services found: ${wsl.map((w) => w.url).join(", ")}`); }
+    for (const entry of wsl) {
+      if (this.clients.has(entry.url)) continue;
+      const last = this.wslTried.get(entry.url) ?? 0;
+      if (Date.now() - last < 60_000) continue;
+      this.wslTried.set(entry.url, Date.now());
+      try {
+        const client = await this.attach(entry.url, { password: entry.password });
+        if (client) {
+          attached.push(entry.url);
+          log(`attached WSL service ${entry.url} (${entry.distro})`);
+        }
+      } catch (e) {
+        log(`WSL service ${entry.url} not reachable: ${e.message}`);
+      }
     }
     return { ports, attached };
   }

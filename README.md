@@ -153,25 +153,43 @@ start. WSL2 forwards `localhost`, so a server started inside WSL as
 `opencode serve --hostname 0.0.0.0 --port 4096` is reachable from Windows at
 `http://localhost:4096`.
 
-**OpenCode 2** needs HTTP Basic credentials (`opencode:<password>`):
+**OpenCode 2 in WSL needs no setup at all.** A managed v2 service publishes its own
+credentials to `~/.local/state/opencode/service.json` (`url` + `password`). The brain reads
+that file through `\\wsl.localhost\<distro>\home\<user>`, rewrites the loopback address to
+`localhost` (WSL2 forwards it), and attaches with the password it found — no copy-paste:
+
+```
+attached WSL service http://localhost:49374 (Ubuntu-26.04)
+```
+
+That is the path the OpenCode desktop app / `opencode serve --service` uses, and it is
+re-checked every 10 s (a stale entry is retried at most once a minute). Nothing is written to
+your OpenCode files and the password is only kept in `~/.cute-pets/config.json`, like any
+other attached server.
+
+For a server you start by hand, pass the password instead:
 
 ```bash
 # in WSL
-OPENCODE_SERVER_PASSWORD=… /home/user/.opencode/bin/opencode serve --hostname 0.0.0.0 --port 4301
+OPENCODE_SERVER_PASSWORD=… ~/.opencode/bin/opencode serve --hostname 0.0.0.0 --port 4301
 
-# once, from Windows — the credential is stored and reused at every start
+# once, from Windows - stored and reused on every start
 curl -X POST http://127.0.0.1:4280/api/attach \
   -d '{"url":"http://localhost:4301","password":"…"}'
 ```
 
-or `npm run brain -- --server http://localhost:4301 --password …`. A managed v2 service
-writes `~/.local/state/opencode/service.json` with its URL and password.
+or `npm run brain -- --server http://localhost:4301 --password …`.
 
-v2 differences worth knowing: prompts are sent with `delivery: "queue"` (the default
-`steer` is dropped when no turn is running), messages come newest-first with `content[]`
-instead of `parts[]`, and user text sits at `m.text`. `/model`, `/agent`, `/compact`,
-`/share`, `/undo`, `/redo` are **not wired for v2** — their request bodies differ and were
-not verified.
+**Pick a model v2 knows.** v1 model ids (`deepseek-v4.1-flash-free` and friends) may not exist
+on a v2 server; if you send one, the run sits in `running` while the server retries
+(`session.retry.scheduled`) and never produces text. List what the server has with
+`GET /api/model` (e.g. `gemini-4-carbon`) and use that id.
+
+v2 differences the client already absorbs: prompts go out with `delivery: "queue"` (the
+default `steer` is dropped when no turn is running), messages are newest-first with
+`content[]` instead of `parts[]` and user text at `m.text`, permission replies use
+`{action, resources}`, and `/model`, `/agent`, `/compact`, `/share`, `/undo`, `/redo` are
+**not wired for v2**.
 
 ---
 
