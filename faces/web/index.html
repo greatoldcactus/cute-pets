@@ -133,7 +133,27 @@ const COLOR={idle:"#6ee7a8",running:"#5ac8ff",waiting:"#ffc65c",error:"#ff6b6b"}
 const img=new Image(); img.src="/assets/saber/spritesheet.webp";
 const cv=$("#pet"), ctx=cv.getContext("2d");
 let petState="idle";
-function frame(t){ const s=FPS[petState]||6; return Math.floor(t/1000*s)%FRAMES; }
+/* Rows are padded with fully transparent cells: the real animation length differs
+   per row (idle has 7 usable frames, row 5 has 8). Sampling alpha once keeps the
+   pet from blanking out on a padding frame. */
+const validFrames={};
+function measureFrames(){
+  const c=document.createElement("canvas"); c.width=FW; c.height=FH;
+  const g=c.getContext("2d");
+  for(let r=0;r<11;r++){
+    let last=1;
+    for(let f=0;f<FRAMES;f++){
+      g.clearRect(0,0,FW,FH);
+      g.drawImage(img, f*FW, r*FH, FW, FH, 0, 0, FW, FH);
+      const d=g.getImageData(0,0,FW,FH).data;
+      let solid=0;
+      for(let i=3;i<d.length;i+=4*17){ if(d[i]>16) solid++; }
+      if(solid>10) last=f+1;
+    }
+    validFrames[r]=last;
+  }
+}
+function frame(t){ const s=FPS[petState]||6; const n=validFrames[ROW[petState]??0]||FRAMES; return Math.floor(t/1000*s)%n; }
 function loop(t){
   if(img.complete&&img.naturalWidth){
     ctx.clearRect(0,0,cv.width,cv.height);
@@ -142,7 +162,7 @@ function loop(t){
   }
   requestAnimationFrame(loop);
 }
-img.onload=()=>requestAnimationFrame(loop);
+img.onload=()=>{ measureFrames(); requestAnimationFrame(loop); };
 requestAnimationFrame(loop);
 
 /* ---------- render ---------- */

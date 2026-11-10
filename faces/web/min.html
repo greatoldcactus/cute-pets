@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Saber</title>
+<style>
+:root{--ink:#eceef6;--dim:#9aa1b8;--card:#181b24;--card2:#222634;--line:#2c3142;
+--run:#5ac8ff;--wait:#ffc65c;--err:#ff6b6b;--ok:#6ee7a8}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:transparent;overflow:hidden;
+font:13px/1.45 ui-sans-serif,system-ui,"Segoe UI",sans-serif;color:var(--ink);user-select:none}
+.wrap{position:relative;width:100%;height:100%}
+/* ---------- pet ---------- */
+.petzone{position:absolute;right:0;bottom:0;width:260px;height:394px;display:flex;flex-direction:column;
+align-items:center;justify-content:flex-end;padding-bottom:4px}
+#pet{-webkit-app-region:drag;cursor:pointer;width:200px;height:217px;
+filter:drop-shadow(0 12px 16px rgba(0,0,0,.6))}
+
+/* ---------- bubbles ---------- */
+body.expanded .bubbles{display:none}
+.bubbles{display:flex;flex-direction:column;align-items:flex-end;gap:6px;margin-bottom:4px;padding:0 6px;
+max-width:256px;z-index:3}
+.bub{display:flex;align-items:center;gap:7px;max-width:242px;background:rgba(24,27,36,.94);
+border:1px solid var(--line);border-radius:12px;padding:6px 10px;font:inherit;font-size:12px;
+color:var(--ink);cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.45);animation:pop .18s ease}
+.bub:hover{border-color:#47506b}
+.bub i{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:none}
+.bub.waiting i{background:var(--wait)}.bub.running i{background:var(--run)}.bub.error i{background:var(--err)}
+.bub span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bub.waiting{border-color:#4a3a1a}
+@keyframes pop{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+/* ---------- panel ---------- */
+.panel{position:absolute;left:6px;right:6px;top:6px;bottom:398px;display:none;flex-direction:column;
+background:rgba(17,19,26,.97);border:1px solid var(--line);border-radius:14px;overflow:hidden;
+box-shadow:0 18px 40px rgba(0,0,0,.55);backdrop-filter:blur(8px)}
+body.expanded .panel{display:flex}
+.panel header{display:flex;align-items:center;gap:9px;padding:10px 12px;border-bottom:1px solid var(--line)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--ok)}
+.dot.running{background:var(--run)}.dot.waiting{background:var(--wait)}.dot.error{background:var(--err)}
+.h1{font-weight:600;font-size:12.5px}
+.h2{font-size:11px;color:var(--dim)}
+header .sp{flex:1}
+header button{background:transparent;border:0;color:var(--dim);font-size:14px;cursor:pointer;padding:2px 4px}
+header button:hover{color:var(--ink)}
+.tabs{display:flex;gap:4px;padding:8px 10px 0}
+.tab{background:transparent;border:1px solid var(--line);border-radius:999px;color:var(--dim);
+font:inherit;font-size:11px;padding:3px 9px;cursor:pointer}
+.tab.on{color:var(--ink);border-color:#47506b;background:#202434}
+.list{flex:1;overflow:auto;padding:8px 10px;display:flex;flex-direction:column;gap:6px}
+.srow{display:flex;gap:8px;align-items:flex-start;background:var(--card);border:1px solid var(--line);
+border-radius:10px;padding:7px 9px;cursor:pointer}
+.srow:hover{border-color:#47506b}
+.chip{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border-radius:999px;
+border:1px solid var(--line);color:var(--dim);flex:none;margin-top:1px}
+.chip.running{color:var(--run);border-color:#1d3c52;background:#10222d}
+.chip.waiting{color:var(--wait);border-color:#4a3a1a;background:#2a2110}
+.chip.error{color:var(--err);border-color:#4a2020;background:#2a1414}
+.chip.idle{color:var(--ok);border-color:#1d4030;background:#10251c}
+.stitle{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ssub{font-size:10.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.perm{margin:8px 10px 0;border:1px solid #4a3a1a;background:#241d0f;border-radius:10px;padding:8px 9px;font-size:11.5px}
+.perm .row{display:flex;gap:6px;margin-top:6px}
+.perm b{color:var(--wait)}
+.pbtn{background:#2a2f3f;border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:3px 8px;
+font:inherit;font-size:11px;cursor:pointer}
+.pbtn.ok{background:#1d4030;border-color:#2c6b4c}.pbtn.no{background:#45212a;border-color:#6b2f3a}
+.composer{display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--line)}
+.composer input{flex:1;background:var(--card2);border:1px solid var(--line);border-radius:8px;color:var(--ink);
+font:inherit;font-size:12px;padding:6px 9px;min-width:0}
+.composer button{background:#24506b;border:1px solid #2f6d92;color:var(--ink);border-radius:8px;
+padding:6px 10px;font:inherit;cursor:pointer}
+.chatview{flex:1;display:none;flex-direction:column;min-height:0}
+.chatview.on{display:flex}
+.chatmsgs{flex:1;overflow:auto;padding:8px 10px;display:flex;flex-direction:column;gap:6px}
+.msg{background:var(--card2);border-radius:9px;padding:6px 9px;font-size:11.5px;white-space:pre-wrap;
+max-height:220px;overflow:auto}
+.msg.user{border-left:2px solid #3d4460;color:#c3c9dc}
+.msg.assistant{border-left:2px solid var(--run)}
+.empty{color:var(--dim);font-size:11.5px;text-align:center;padding:16px 0}
+</style></head>
+<body class="minimized">
+<div class="wrap">
+  <section class="panel interactive">
+    <header>
+      <div class="dot" id="dot"></div>
+      <div style="min-width:0"><div class="h1">Saber</div><div class="h2" id="psub">idle</div></div>
+      <div class="sp"></div>
+      <button id="collapse" title="collapse">&#10005;</button>
+    </header>
+    <div class="tabs">
+      <button class="tab on" data-tab="sessions" id="tabSessions">sessions</button>
+      <button class="tab" data-tab="chat" id="tabChat" style="display:none">conversation</button>
+    </div>
+    <div class="list" id="list"></div>
+    <div class="chatview" id="chatview"><div class="chatmsgs" id="chatmsgs"></div></div>
+    <form class="composer" id="composer">
+      <input id="prompt" placeholder="Ask OpenCode..." autocomplete="off">
+      <button type="submit">&#9166;</button>
+    </form>
+  </section>
+
+  <div class="petzone interactive">
+    <div class="bubbles" id="bubbles"></div>
+    <canvas id="pet" width="400" height="434"></canvas>
+  </div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const api=window.cp||{setExpanded(){},setIgnore(){},quit(){}};
+let state={pet:{state:"idle"},sessions:[],permissions:[],servers:[]};
+let expanded=false, chatSession=null, view="sessions";
+
+/* ---------- sprite ---------- */
+const FW=192,FH=208,FRAMES=8;
+const ROW={idle:0,running:2,waiting:6,error:9};
+const FPS={idle:6,running:11,waiting:5,error:4};
+const COLOR={idle:"#6ee7a8",running:"#5ac8ff",waiting:"#ffc65c",error:"#ff6b6b"};
+const img=new Image(); img.src="/assets/saber/spritesheet.webp";
+const cv=$("#pet"), ctx=cv.getContext("2d");
+const valid={};
+let petState="idle";
+function measure(){
+  const c=document.createElement("canvas"); c.width=FW; c.height=FH; const g=c.getContext("2d");
+  for(let r=0;r<11;r++){ let last=1;
+    for(let f=0;f<FRAMES;f++){
+      g.clearRect(0,0,FW,FH); g.drawImage(img,f*FW,r*FH,FW,FH,0,0,FW,FH);
+      const d=g.getImageData(0,0,FW,FH).data; let solid=0;
+      for(let i=3;i<d.length;i+=4*17) if(d[i]>16) solid++;
+      if(solid>10) last=f+1;
+    }
+    valid[r]=last;
+  }
+}
+function draw(t){
+  if(img.complete&&img.naturalWidth){
+    const r=ROW[petState]??0, n=valid[r]||FRAMES, s=FPS[petState]||6;
+    const f=Math.floor(t/1000*s)%n;
+    ctx.clearRect(0,0,cv.width,cv.height);
+    ctx.drawImage(img,f*FW,r*FH,FW,FH,0,0,cv.width,cv.height);
+  }
+  requestAnimationFrame(draw);
+}
+img.onload=()=>{ measure(); requestAnimationFrame(draw); };
+requestAnimationFrame(draw);
+
+/* ---------- interaction ---------- */
+function setExpanded(on){
+  expanded=on;
+  document.body.classList.toggle("expanded",on);
+  document.body.classList.toggle("minimized",!on);
+  api.setExpanded(on);
+}
+$("#collapse").onclick=e=>{ e.stopPropagation(); setExpanded(false); };
+$("#pet").onclick=()=>{ if(!expanded) setExpanded(true); else setExpanded(false); };
+
+// let clicks through everywhere except the pet/bubbles/panel
+document.addEventListener("mousemove",e=>{
+  const el=document.elementFromPoint(e.clientX,e.clientY);
+  const hit=!!(el&&el.closest(".interactive"));
+  api.setIgnore(!hit);
+});
+
+/* ---------- render ---------- */
+function active(){ return state.sessions.filter(s=>s.state!=="idle"); }
+
+function renderBubbles(){
+  const act=active().sort((a,b)=>(a.state==="waiting"?-1:1)-(b.state==="waiting"?-1:1)).slice(0,3);
+  $("#bubbles").innerHTML=act.map(s=>`<button class="bub ${s.state}" data-session="${esc(s.id)}">
+      <i></i><span>${esc(s.title)}</span></button>`).join("");
+}
+
+function renderPanel(){
+  const pet=state.pet||{};
+  $("#dot").className="dot "+(pet.state||"idle");
+  const c=pet.counts||{};
+  $("#psub").textContent=[c.waiting?`${c.waiting} needs you`:"",c.running?`${c.running} working`:"",
+    c.error?`${c.error} error`:"",`${c.idle||0} idle`].filter(Boolean).join(" · ")||"idle";
+
+  const perms=state.permissions||[];
+  const permHtml=perms.map(p=>`<div class="perm"><b>Approval needed</b> · ${esc(p.permission)}
+      ${(p.patterns||[]).length?`<div class="h2">${esc((p.patterns||[]).join(", "))}</div>`:""}
+      <div class="row"><button class="pbtn ok" data-perm="${esc(p.id)}" data-reply="once">Allow once</button>
+      <button class="pbtn" data-perm="${esc(p.id)}" data-reply="always">Always</button>
+      <button class="pbtn no" data-perm="${esc(p.id)}" data-reply="reject">Reject</button></div></div>`).join("");
+
+  $("#list").innerHTML=permHtml+(state.sessions.length?state.sessions.slice(0,40).map(s=>`
+    <div class="srow" data-session="${esc(s.id)}">
+      <span class="chip ${s.state}">${s.state}</span>
+      <div style="min-width:0;flex:1">
+        <div class="stitle">${esc(s.title)}</div>
+        <div class="ssub">${esc(s.dirName||"")}${s.lastText?" · "+esc(s.lastText.slice(0,60)):""}</div>
+      </div>
+    </div>`).join(""):`<div class="empty">no sessions</div>`);
+}
+
+function render(){
+  petState=(state.pet&&state.pet.state)||"idle";
+  renderBubbles(); renderPanel();
+}
+
+/* ---------- actions ---------- */
+async function post(path,body){
+  const r=await fetch(path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+  const j=await r.json(); if(!r.ok) throw new Error(j.error||r.status); return j;
+}
+document.addEventListener("click",async e=>{
+  const perm=e.target.closest("[data-perm]");
+  if(perm){ try{ await post("/api/permission",{id:perm.dataset.perm,reply:perm.dataset.reply}); }catch(err){ console.error(err); } return; }
+  const row=e.target.closest("[data-session]");
+  if(row){ openChat(row.dataset.session); }
+});
+
+function openChat(id){
+  const s=state.sessions.find(x=>x.id===id); if(!s) return;
+  chatSession=s; view="chat";
+  setExpanded(true);
+  $("#tabChat").style.display="";
+  $("#tabChat").classList.add("on"); $("#tabSessions").classList.remove("on");
+  $("#list").style.display="none"; $("#chatview").classList.add("on");
+  $("#tabChat").textContent=s.title.length>22?s.title.slice(0,22)+"…":s.title;
+  loadChat();
+}
+$("#tabSessions").onclick=()=>toggleView("sessions");
+$("#tabChat").onclick=()=>{ if(chatSession) toggleView("chat"); };
+function toggleView(v){
+  view=v;
+  $("#list").style.display=v==="sessions"?"":"none";
+  $("#chatview").classList.toggle("on",v==="chat");
+  $("#tabSessions").classList.toggle("on",v==="sessions");
+  $("#tabChat").classList.toggle("on",v==="chat");
+}
+
+async function loadChat(){
+  if(!chatSession) return;
+  const r=await fetch(`/api/messages?server=${encodeURIComponent(chatSession.server)}&sessionId=${encodeURIComponent(chatSession.id)}&limit=20`);
+  const msgs=await r.json();
+  const el=$("#chatmsgs");
+  el.innerHTML=(msgs||[]).map(m=>({m,t:(m.parts||[]).map(p=>p.text).join("\n").trim()})).filter(x=>x.t)
+    .map(({m,t})=>`<div class="msg ${m.role==="user"?"user":"assistant"}">${esc(t)}</div>`).join("")
+    ||`<div class="empty">no messages yet</div>`;
+  el.scrollTop=el.scrollHeight;
+}
+
+$("#composer").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const t=$("#prompt").value.trim(); if(!t) return;
+  $("#prompt").value="";
+  try{
+    if(chatSession) await post("/api/prompt",{server:chatSession.server,sessionId:chatSession.id,text:t});
+    else await post("/api/prompt",{newSession:true,text:t});
+    setTimeout(loadChat,700);
+  }catch(err){ console.error(err); }
+});
+
+function connect(){
+  const es=new EventSource("/api/events");
+  es.addEventListener("state",ev=>{
+    state=JSON.parse(ev.data); render();
+    if(expanded&&view==="chat") loadChat();
+  });
+  es.onerror=()=>{ es.close(); setTimeout(connect,1500); };
+}
+connect(); render();
+</script></body></html>
