@@ -19,6 +19,7 @@ export class PetState {
   constructor() {
     this.sessions = new Map(); // key -> record
     this.servers = new Map(); // url -> {url, directory, online, lastEventAt, error}
+    this.hidden = new Map(); // session id -> {id, server, title, at}; pet-side only, never deletes
     this.permissions = new Map(); // permission id -> [key, request]
     this.listeners = new Set();
     this.timer = null;
@@ -199,6 +200,24 @@ export class PetState {
     };
   }
 
+  hideSession(server, id) {
+    const rec = this.sessions.get(`${server}::${id}`);
+    this.hidden.set(id, { id, server, title: rec?.title ?? "", at: Date.now() });
+    return this.hidden.get(id);
+  }
+
+  unhideSession(id) {
+    return this.hidden.delete(id);
+  }
+
+  loadHidden(list) {
+    for (const h of list ?? []) if (h?.id) this.hidden.set(h.id, { at: Date.now(), ...h });
+  }
+
+  hiddenList() {
+    return [...this.hidden.values()].sort((a, b) => (b.at || 0) - (a.at || 0));
+  }
+
   snapshot() {
     // Every opencode process over the same data directory reports the same
     // sessions, so collapse duplicates by session id and keep the best record:
@@ -215,6 +234,7 @@ export class PetState {
     }
 
     const sessions = [...best.values()]
+      .filter(({ rec }) => !this.hidden.has(rec.id))
       .map(({ rec }) => ({
         server: rec.server,
         id: rec.id,
@@ -255,6 +275,11 @@ export class PetState {
       pet: this.petSummary(sessions),
       servers: [...this.servers.values()],
       sessions,
+      hidden: this.hiddenList().map((h) => ({
+        id: h.id,
+        title: h.title || "(hidden)",
+        server: h.server ?? null,
+      })),
       permissions,
     };
   }

@@ -200,6 +200,16 @@ export function startServer({ port, host, store, api }) {
         return json(res, 200, out);
       }
 
+      if (route === "POST /api/session/hide") {
+        const body = await readBody(req);
+        const out = api.setHidden({
+          server: body.server ?? null,
+          sessionId: body.sessionId,
+          hidden: body.hidden !== false,
+        });
+        return json(res, 200, out);
+      }
+
       if (route === "POST /api/session/close") {
         const body = await readBody(req);
         const out = await api.closeSession({ server: body.server ?? null, sessionId: body.sessionId });
