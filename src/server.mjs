@@ -200,6 +200,12 @@ export function startServer({ port, host, store, api }) {
         return json(res, 200, out);
       }
 
+      if (route === "POST /api/session/close") {
+        const body = await readBody(req);
+        const out = await api.closeSession({ server: body.server ?? null, sessionId: body.sessionId });
+        return json(res, 200, out);
+      }
+
       if (route === "POST /api/abort") {
         const body = await readBody(req);
         const out = await api.abort({ server: body.server ?? null, sessionId: body.sessionId });

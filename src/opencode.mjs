@@ -61,6 +61,7 @@ export class OpenCodeClient {
     return this.post(`/session/${enc(id)}/prompt_async`, { parts: [{ type: "text", text }], ...extra });
   }
   abort(id) { return this.post(`/session/${enc(id)}/abort`); }
+  deleteSession(id) { return this.#req(`/session/${enc(id)}`, { method: "DELETE" }); }
   replyPermission(permission, reply) {
     const id = typeof permission === "string" ? permission : permission?.id;
     return this.post(`/permission/${enc(id)}/reply`, { reply });

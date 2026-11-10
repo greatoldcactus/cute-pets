@@ -146,6 +146,7 @@ export class OpenCodeV2Client {
   }
 
   abort(id) { return this.#req(`/api/session/${enc(id)}/interrupt`, { method: "POST", body: "{}" }); }
+  deleteSession(id) { return this.#req(`/api/session/${enc(id)}`, { method: "DELETE" }); }
 
   replyPermission(permission, reply) {
     const sessionID = permission?.sessionID;

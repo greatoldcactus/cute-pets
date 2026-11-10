@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("cp", {
   setIgnore: (ignore) => ipcRenderer.send("cp:ignore-mouse", ignore),
   quit: () => ipcRenderer.send("cp:quit"),
   dragBegin: (p) => ipcRenderer.send("cp:drag-begin", p),
+  moveBy: (dx, dy) => ipcRenderer.send("cp:move-by", { dx, dy }),
   dragMove: (p) => ipcRenderer.send("cp:drag-move", p),
   dragEnd: () => ipcRenderer.send("cp:drag-end"),
   setFacing: (facing) => ipcRenderer.send("cp:facing-set", facing),
