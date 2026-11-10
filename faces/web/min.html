@@ -69,6 +69,17 @@ font:inherit;font-size:11px;cursor:pointer}
 font:inherit;font-size:12px;padding:6px 9px;min-width:0}
 .composer button{background:#24506b;border:1px solid #2f6d92;color:var(--ink);border-radius:8px;
 padding:6px 10px;font:inherit;cursor:pointer}
+.petsview{flex:1;display:none;flex-direction:column;min-height:0}
+.petsview.on{display:flex}
+.petlist{flex:1;overflow:auto;padding:8px 10px;display:flex;flex-direction:column;gap:6px}
+.petrow{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);
+border-radius:10px;padding:7px 9px;cursor:pointer}
+.petrow:hover{border-color:#47506b}
+.petrow.on{border-color:#2c6b4c;background:#14201a}
+.petname{font-size:12px;font-weight:600}
+.petid{font-size:10.5px;color:var(--dim);font-family:ui-monospace,monospace}
+.petrow .chip{margin-left:auto}
+.petsbar{display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--line)}
 .chatview{flex:1;display:none;flex-direction:column;min-height:0}
 .chatview.on{display:flex}
 .chatmsgs{flex:1;overflow:auto;padding:8px 10px;display:flex;flex-direction:column;gap:6px}
@@ -90,9 +101,17 @@ max-height:220px;overflow:auto}
     <div class="tabs">
       <button class="tab on" data-tab="sessions" id="tabSessions">sessions</button>
       <button class="tab" data-tab="chat" id="tabChat" style="display:none">conversation</button>
+      <button class="tab" data-tab="pets" id="tabPets">pets</button>
     </div>
     <div class="list" id="list"></div>
     <div class="chatview" id="chatview"><div class="chatmsgs" id="chatmsgs"></div></div>
+    <div class="petsview" id="petsview">
+      <div class="petlist" id="petlist"></div>
+      <div class="petsbar">
+        <button class="pbtn" id="importZip">Import .zip</button>
+        <button class="pbtn" id="importDir">Import folder</button>
+      </div>
+    </div>
     <form class="composer" id="composer">
       <input id="prompt" placeholder="Ask OpenCode..." autocomplete="off">
       <button type="submit">&#9166;</button>
@@ -117,7 +136,18 @@ const FW=192,FH=208,FRAMES=8;
 const ROW={idle:0,running:2,waiting:6,error:9};
 const FPS={idle:6,running:11,waiting:5,error:4};
 const COLOR={idle:"#6ee7a8",running:"#5ac8ff",waiting:"#ffc65c",error:"#ff6b6b"};
-const img=new Image(); img.src="/assets/saber/spritesheet.webp";
+const img=new Image();
+let petKey="";
+async function loadPet(){
+  try{
+    const r=await fetch("/api/pet"); const p=await r.json();
+    if(p.url && p.url!==petKey){
+      petKey=p.url; img.src=p.url;
+      const name=document.querySelector(".h1"); if(name&&p.name) name.textContent=p.name;
+    }
+    return p;
+  }catch{ return null; }
+}
 const cv=$("#pet"), ctx=cv.getContext("2d");
 const valid={};
 let petState="idle";
@@ -256,8 +286,11 @@ function toggleView(v){
   view=v;
   $("#list").style.display=v==="sessions"?"":"none";
   $("#chatview").classList.toggle("on",v==="chat");
+  $("#petsview").classList.toggle("on",v==="pets");
   $("#tabSessions").classList.toggle("on",v==="sessions");
   $("#tabChat").classList.toggle("on",v==="chat");
+  $("#tabPets").classList.toggle("on",v==="pets");
+  if(v==="pets") renderPets();
 }
 
 async function loadChat(){
@@ -270,6 +303,32 @@ async function loadChat(){
     ||`<div class="empty">no messages yet</div>`;
   el.scrollTop=el.scrollHeight;
 }
+
+async function renderPets(){
+  try{
+    const r=await fetch("/api/pets"); const {pets,active}=await r.json();
+    $("#petlist").innerHTML = (pets&&pets.length) ? pets.map(p=>`
+      <div class="petrow ${p.id===active?"on":""}" data-pet="${esc(p.id)}">
+        <div style="min-width:0;flex:1">
+          <div class="petname">${esc(p.name)}</div>
+          <div class="petid">${esc(p.id)}</div>
+        </div>
+        ${p.id===active?`<span class="chip idle">active</span>`:``}
+      </div>`).join("") : `<div class="empty">no pets imported yet</div>`;
+  }catch(e){ $("#petlist").innerHTML=`<div class="empty">${esc(e)}</div>`; }
+}
+
+document.addEventListener("click",async e=>{
+  const row=e.target.closest("[data-pet]");
+  if(!row) return;
+  try{
+    await post("/api/pets/active",{id:row.dataset.pet});
+    await loadPet(); renderPets();
+  }catch(err){ console.error(err); }
+});
+$("#tabPets").onclick=()=>toggleView("pets");
+$("#importZip").onclick=async()=>{ if(!api.importPet) return; await api.importPet("file"); await loadPet(); renderPets(); };
+$("#importDir").onclick=async()=>{ if(!api.importPet) return; await api.importPet("folder"); await loadPet(); renderPets(); };
 
 $("#composer").addEventListener("submit",async e=>{
   e.preventDefault();
@@ -290,5 +349,7 @@ function connect(){
   });
   es.onerror=()=>{ es.close(); setTimeout(connect,1500); };
 }
+loadPet().then(()=>{ renderPets(); });
+setInterval(()=>{ loadPet(); }, 4000);   // pick up pet switches made from the CLI or another face
 connect(); render();
 </script></body></html>

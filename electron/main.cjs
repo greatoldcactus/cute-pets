@@ -1,7 +1,7 @@
 // cute-pets desktop shell: a transparent, frameless, always-on-top pet window.
 // Usage: npx electron electron/main.cjs [--dev]
 // Env:   CP_URL  brain URL (default http://127.0.0.1:4282)
-const { app, BrowserWindow, ipcMain, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, screen, dialog } = require("electron");
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -98,6 +98,29 @@ app.whenReady().then(() => {
     } catch {}
   });
   ipcMain.on("cp:quit", () => app.quit());
+
+  // Import a pet pack (.zip file or a folder) through a native dialog, then let
+  // the brain copy it into ~/.cute-pets/pets/<id>/.
+  ipcMain.handle("cp:pick-pet", async (_e, kind) => {
+    const properties = kind === "folder" ? ["openDirectory"] : ["openFile"];
+    const res = await dialog.showOpenDialog(win, {
+      title: "Import pet",
+      buttonLabel: "Import",
+      properties,
+      filters: kind === "folder" ? undefined : [{ name: "Pet pack", extensions: ["zip"] }],
+    });
+    if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+    try {
+      const r = await fetch(`${BRAIN}/api/pets/import`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: res.filePaths[0] }),
+      });
+      return { ok: r.ok, ...(await r.json()) };
+    } catch (err) {
+      return { ok: false, error: String(err.message || err) };
+    }
+  });
 
   ipcMain.on("cp:facing-set", (_e, facing) => {
     if (facing !== "left" && facing !== "right") return;
