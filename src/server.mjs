@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { listPets, importPet, usePet, activePet, petAsset } from "./pets.mjs";
+import { readConfig, writeConfig } from "./config.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = path.join(HERE, "..", "faces", "web");
@@ -139,6 +140,25 @@ export function startServer({ port, host, store, api }) {
           clients.delete(res);
         });
         return;
+      }
+
+      if (route === "POST /api/attach") {
+        const body = await readBody(req);
+        if (!body.url) return json(res, 400, { error: "url required" });
+        const client = await api.attach(body.url, { directory: body.directory ?? null });
+        return json(res, client ? 200 : 502, {
+          ok: Boolean(client),
+          attached: store.snapshot().servers.map((s) => s.url),
+        });
+      }
+
+      if (route === "POST /api/detach") {
+        const body = await readBody(req);
+        const url = String(body.url ?? "").replace(/\/+$/, "");
+        const cfg = readConfig();
+        const servers = (cfg.servers ?? []).filter((u) => u !== url);
+        writeConfig({ servers });
+        return json(res, 200, { ok: true, servers });
       }
 
       if (route === "POST /api/announce") {

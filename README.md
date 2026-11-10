@@ -75,6 +75,27 @@ Without it, discovery still works by port scan.
 - **Approves or rejects permission requests** from the face — `once` / `always` / `reject`.
 - Sends new requests (new session or into an existing one) and aborts a running session.
 
+## Attaching servers elsewhere (WSL, another machine)
+
+The brain talks to any reachable `opencode serve`, not just local processes:
+
+```bash
+curl -X POST http://127.0.0.1:4280/api/attach -d '{"url":"http://localhost:4096"}'
+curl -X POST http://127.0.0.1:4280/api/detach -d '{"url":"http://localhost:4096"}'
+```
+
+Attached URLs are saved in `~/.cute-pets/config.json` under `servers` and re-attached on
+start, so a WSL instance only has to be attached once. WSL2 forwards `localhost`, so a
+server started inside WSL as `opencode serve --hostname 0.0.0.0 --port 4096` is reachable
+from Windows at `http://localhost:4096`.
+
+**Version caveat:** cute-pets speaks the OpenCode **1.x** API (`/session`, `/event`,
+`/permission`). OpenCode **2.x** (`opencode v2.2.6`) moved to `/api/*` and requires
+credentials — the client will not drive a v2 server. Check with `opencode --version`.
+
+New chats never spawn a server for a Linux path from Windows; the brain returns an error
+telling you to attach the WSL server instead.
+
 ## Panel
 
 - **Two panes**: session list on the left stays visible while a conversation opens on the right.
