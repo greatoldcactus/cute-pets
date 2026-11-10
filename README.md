@@ -89,9 +89,23 @@ start, so a WSL instance only has to be attached once. WSL2 forwards `localhost`
 server started inside WSL as `opencode serve --hostname 0.0.0.0 --port 4096` is reachable
 from Windows at `http://localhost:4096`.
 
-**Version caveat:** cute-pets speaks the OpenCode **1.x** API (`/session`, `/event`,
-`/permission`). OpenCode **2.x** (`opencode v2.2.6`) moved to `/api/*` and requires
-credentials — the client will not drive a v2 server. Check with `opencode --version`.
+**OpenCode 2 is supported.** The brain probes `/global/health` (v1) and falls back to
+`/api/info` (v2), then picks the matching client. v2 needs HTTP Basic credentials:
+
+```bash
+# start the WSL server with a known password
+OPENCODE_SERVER_PASSWORD=*** /home/user/.opencode/bin/opencode serve --hostname 0.0.0.0 --port 4301
+
+# attach once from Windows; the credential is stored and reused on every start
+curl -X POST http://127.0.0.1:4280/api/attach \
+  -d '{"url":"http://localhost:4301","password":"***"}'
+```
+
+or `npm run brain -- --server http://localhost:4301 --password ***`. A managed v2 service
+writes `~/.local/state/opencode/service.json` with its url and password.
+
+v2 limitations: `/model`, `/agent`, `/compact`, `/share`, `/undo`, `/redo` are not wired
+(request bodies differ and were not verified); prompts are sent with `delivery: "queue"`.
 
 New chats never spawn a server for a Linux path from Windows; the brain returns an error
 telling you to attach the WSL server instead.

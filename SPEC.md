@@ -153,7 +153,14 @@ persisting later; it is desktop-owned state, not a session concern.
   directories cannot identify a server.
 - On Windows, a new chat with a POSIX path is rejected with instructions to attach the
   WSL server instead of spawning a local one.
-- OpenCode 2.x uses `/api/*` with auth and is not supported by this client (see README).
+- **OpenCode 2.x is supported** through `src/opencode-v2.mjs`, detected by probing
+  `/global/health` then `/api/info`. Differences handled there: HTTP Basic auth
+  (`opencode:<password>`), `/api/*` prefix, `{data}` envelope, `location.directory`,
+  `content[]` instead of `parts[]` (user text is `m.text`), newest-first message order,
+  `delivery:"queue"` for prompts, `interrupt` instead of `abort`, `{action,resources}`
+  permission replies, and event translation
+  (`session.execution.*`/`session.text.*` → v1 names). Model/agent/compact/share/revert
+  are not implemented for v2.
 
 ## 8. Risks to verify
 

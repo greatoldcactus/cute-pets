@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { readConfig, writeConfig } from "./config.mjs";
 import { PetState, STATE } from "./state.mjs";
 import { OpenCodeClient } from "./opencode.mjs";
+import { OpenCodeV2Client } from "./opencode-v2.mjs";
 import { findOpencodePorts } from "./discover.mjs";
 import { startServer } from "./server.mjs";
 
@@ -35,7 +36,15 @@ async function waitForHealth(url, timeoutMs = 20000) {
   }
   throw new Error(`server did not start: ${url}`);
 }
-const log = (...a) => console.log("[cute-pets]", ...a);
+const LOG_FILE = path.join(os.homedir(), ".cute-pets", "brain.log");
+const log = (...a) => {
+  const line = `[${new Date().toISOString()}] ${a.join(" ")}`;
+  console.log(line);
+  try {
+    fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+    fs.appendFileSync(LOG_FILE, line + "\n");
+  } catch {}
+};
 
 function parseArgs(argv) {
   const out = { port: 4280, host: "127.0.0.1", servers: [] };
@@ -43,7 +52,13 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === "--port") out.port = Number(argv[++i]);
     else if (a === "--host") out.host = argv[++i];
-    else if (a === "--server") out.servers.push(argv[++i]);
+    else if (a === "--server") out.servers.push({ url: argv[++i], password: null });
+    else if (a === "--password") {
+      const pw = argv[++i];
+      const last = out.servers[out.servers.length - 1];
+      if (last) last.password = pw;
+      else out.password = pw;
+    }
     else if (a === "--help" || a === "-h") out.help = true;
   }
   return out;
@@ -53,6 +68,7 @@ class Hub {
   constructor(store) {
     this.store = store;
     this.clients = new Map();
+    this.credentials = new Map(); // url -> password (never exposed in snapshots)
     this.permissionTimer = null;
   }
 
@@ -67,22 +83,31 @@ class Hub {
     return online[0].client.baseUrl;
   }
 
-  async attach(url, { directory = null } = {}) {
+  async attach(url, { directory = null, password = null } = {}) {
     const clean = String(url).replace(/\/+$/, "");
     const existing = this.clients.get(clean);
     if (existing) {
       if (!existing.client.online) this.#restartStream(clean);
       return existing.client;
     }
-    const client = new OpenCodeClient(clean, { directory });
+
+    // v1 or v2? Probe /global/health first, then /api/info with credentials.
+    const creds = password || this.credentials.get(clean) || null;
+    let client = new OpenCodeClient(clean, { directory });
     let health;
     try {
       health = await client.health();
-    } catch (err) {
-      // Never register a dead URL: a plugin may announce its configured default
-      // instead of the port the server actually picked.
-      log(`attach failed ${clean}: ${err.message ?? err}`);
-      return null;
+    } catch (v1err) {
+      client = new OpenCodeV2Client(clean, { directory, password: creds });
+      try {
+        health = await client.health();
+        log(`attached ${clean} as OpenCode ${health?.version ?? "2"}`);
+      } catch (v2err) {
+        // Never register a dead URL: a plugin may announce its configured default
+        // instead of the port the server actually picked.
+        log(`attach failed ${clean}: ${v1err.message ?? v1err}`);
+        return null;
+      }
     }
     client.online = true;
     let workdir = directory;
@@ -91,14 +116,15 @@ class Hub {
     } catch {}
     this.store.addServer(clean, { directory: workdir });
     this.store.setServerOnline(clean, true);
-    const entry = { client, controller: null, attempts: 0, workdir };
+    const entry = { client, controller: null, attempts: 0, workdir, password: creds };
     this.clients.set(clean, entry);
     log(`attached ${clean} (opencode ${health?.version ?? "?"})`);
     try {
+      if (creds) this.credentials.set(clean, creds);
       const cfg = readConfig();
-      const servers = new Set(cfg.servers ?? []);
-      servers.add(clean);
-      writeConfig({ servers: [...servers] });
+      const list = (cfg.servers ?? []).filter((e) => (typeof e === "string" ? e : e.url) !== clean);
+      list.push(creds ? { url: clean, password: creds } : clean);
+      writeConfig({ servers: list });
     } catch {}
     await this.sync(clean);
     this.#restartStream(clean);
@@ -181,6 +207,8 @@ class Hub {
 
   handleEvent(url, ev) {
     const p = ev?.properties ?? {};
+    const srv = this.store.servers.get(url);
+    if (srv) srv.lastEventAt = Date.now();
     switch (ev?.type) {
       case "session.created":
       case "session.updated":
@@ -273,6 +301,7 @@ class Hub {
     const entry = url && this.clients.get(url);
     if (!entry) return { models: [], default: {} };
     const cfg = await entry.client.models();
+    if (Array.isArray(cfg?.flat)) return { models: cfg.flat, default: cfg.default ?? {} };
     const out = [];
     for (const provider of cfg?.providers ?? []) {
       for (const modelID of Object.keys(provider.models ?? {})) {
@@ -408,7 +437,8 @@ class Hub {
     const url = found ? found[0].split("::")[0] : null;
     const entry = url && this.clients.get(url);
     if (!entry) throw new Error("permission not found");
-    await entry.client.replyPermission(id, reply);
+    const request = found?.[1];
+    await entry.client.replyPermission(request ?? id, reply);
     this.store.removePermission(id);
     this.#refreshPermissions(url);
     return { ok: true };
@@ -453,9 +483,10 @@ function writeDiscovery(port, host) {
 const args = parseArgs(process.argv.slice(2));
 if (args.help) {
   console.log(`cute-pets brain
-  --port <n>       face API port (default 4280)
-  --host <addr>    bind address (default 127.0.0.1)
-  --server <url>   attach to an opencode server (repeatable)
+  --port <n>        face API port (default 4280)
+  --host <addr>     bind address (default 127.0.0.1)
+  --server <url>    attach to an opencode server (repeatable; v1 or v2)
+  --password <pw>   basic-auth password for OpenCode 2 (use after --server)
 `);
   process.exit(0);
 }
@@ -466,9 +497,11 @@ const { port } = await startServer({ port: args.port, host: args.host, store, ap
 writeDiscovery(port, args.host);
 log(`face API on http://${args.host}:${port}`);
 
-for (const url of args.servers) await hub.attach(url);
-for (const url of readConfig().servers ?? []) {
-  if (!args.servers.includes(url)) await hub.attach(url).catch(() => {});
+for (const entry of args.servers) await hub.attach(entry.url, { password: entry.password ?? args.password ?? null });
+for (const entry of readConfig().servers ?? []) {
+  const url = typeof entry === "string" ? entry : entry.url;
+  const password = typeof entry === "string" ? null : entry.password ?? null;
+  if (url && !args.servers.includes(url)) await hub.attach(url, { password }).catch(() => {});
 }
 await hub.discover();
 setInterval(() => { void hub.discover(); }, 10_000);
