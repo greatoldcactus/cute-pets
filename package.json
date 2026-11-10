@@ -5,7 +5,10 @@
   "type": "module",
   "description": "Desktop pets for OpenCode that show real sessions: titles, states, approvals, and chat.",
   "scripts": {
+    "brain": "node src/main.mjs",
+    "shell": "electron electron/main.cjs",
     "start": "node src/main.mjs",
+    "pets": "node scripts/pet.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "engines": {
