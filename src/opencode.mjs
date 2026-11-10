@@ -61,7 +61,10 @@ export class OpenCodeClient {
     return this.post(`/session/${enc(id)}/prompt_async`, { parts: [{ type: "text", text }], ...extra });
   }
   abort(id) { return this.post(`/session/${enc(id)}/abort`); }
-  replyPermission(id, reply) { return this.post(`/permission/${enc(id)}/reply`, { reply }); }
+  replyPermission(permission, reply) {
+    const id = typeof permission === "string" ? permission : permission?.id;
+    return this.post(`/permission/${enc(id)}/reply`, { reply });
+  }
 
   // SSE bus. Resolves when the stream ends; caller handles reconnect.
   async stream(onEvent, { signal } = {}) {

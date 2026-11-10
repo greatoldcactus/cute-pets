@@ -145,7 +145,10 @@ export function startServer({ port, host, store, api }) {
       if (route === "POST /api/attach") {
         const body = await readBody(req);
         if (!body.url) return json(res, 400, { error: "url required" });
-        const client = await api.attach(body.url, { directory: body.directory ?? null });
+        const client = await api.attach(body.url, {
+          directory: body.directory ?? null,
+          password: body.password ?? null,
+        });
         return json(res, client ? 200 : 502, {
           ok: Boolean(client),
           attached: store.snapshot().servers.map((s) => s.url),
