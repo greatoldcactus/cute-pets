@@ -132,6 +132,18 @@ tray / notify / hotkey`. Tray is never the only door (GNOME needs AppIndicator),
 window must open the session menu and composer itself. Autostart: XDG desktop file,
 Run key, LaunchAgent. Packaging: AppImage first, deb/rpm later, no Flatpak in v1.
 
+## 7b. Shell config
+
+`~/.cute-pets/config.json` (shared dir with `brain.json`), read by the Electron shell:
+
+| key | values | meaning |
+| --- | --- | --- |
+| `facing` | `"right"` (default) \| `"left"` | which way the sprite is drawn; `left` is a horizontal mirror |
+
+Precedence: `--facing` CLI flag → config file → default. Changing facing in the UI
+(double-click) writes the file, so it survives restarts. Window position is also worth
+persisting later; it is desktop-owned state, not a session concern.
+
 ## 8. Risks to verify
 
 1. **Two writers.** Chatting from the pet while the TUI has the same session open — does

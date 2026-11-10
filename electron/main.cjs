@@ -5,6 +5,7 @@ const { app, BrowserWindow, ipcMain, screen } = require("electron");
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 
 const BRAIN = process.env.CP_URL || "http://127.0.0.1:4282";
 const MIN = { width: 272, height: 404 };
@@ -13,6 +14,38 @@ const MARGIN = 22;
 
 let win = null;
 let expanded = false;
+let grab = null;
+
+// ---- config -------------------------------------------------------------
+// ~/.cute-pets/config.json is shared with the brain (brain.json lives there too).
+// facing: "right" = sprite as authored, "left" = mirrored.
+const CONFIG_PATH = path.join(os.homedir(), ".cute-pets", "config.json");
+
+function readConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveConfig(cfg) {
+  try {
+    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+  } catch (err) {
+    console.error("[cute-pets] config write failed:", err.message);
+  }
+}
+
+const cliFacing = (() => {
+  const i = process.argv.indexOf("--facing");
+  const v = i >= 0 ? process.argv[i + 1] : null;
+  return v === "left" || v === "right" ? v : null;
+})();
+
+const config = { ...readConfig() };
+config.facing = cliFacing || (config.facing === "left" ? "left" : "right");
 
 function anchorTo(bounds) {
   const cur = win.getBounds();
@@ -65,6 +98,33 @@ app.whenReady().then(() => {
     } catch {}
   });
   ipcMain.on("cp:quit", () => app.quit());
+
+  ipcMain.on("cp:facing-set", (_e, facing) => {
+    if (facing !== "left" && facing !== "right") return;
+    config.facing = facing;
+    saveConfig({ ...readConfig(), facing });
+    win.webContents.send("cp:facing", facing);
+  });
+
+  // Manual dragging: the renderer reports global cursor coords, the main process
+  // moves the window. Keeps click-to-open working (a click is a drag of <4px).
+  ipcMain.on("cp:drag-begin", (_e, p) => {
+    const b = win.getBounds();
+    grab = { dx: p.x - b.x, dy: p.y - b.y };
+  });
+  ipcMain.on("cp:drag-move", (_e, p) => {
+    if (!grab) return;
+    const b = win.getBounds();
+    const area = screen.getDisplayMatching(b).workArea;
+    const x = Math.min(Math.max(area.x, p.x - grab.dx), area.x + area.width - b.width);
+    const y = Math.min(Math.max(area.y, p.y - grab.dy), area.y + area.height - b.height);
+    win.setBounds({ x: Math.round(x), y: Math.round(y), width: b.width, height: b.height }, false);
+  });
+  ipcMain.on("cp:drag-end", () => {
+    grab = null;
+  });
+
+  win.webContents.on("did-finish-load", () => win.webContents.send("cp:facing", config.facing));
 
   if (process.argv.includes("--dev")) startDevServer();
 });

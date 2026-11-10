@@ -49,6 +49,23 @@ node scripts/smoke.mjs    # end-to-end check against a live server
 - **Approves or rejects permission requests** from the face — `once` / `always` / `reject`.
 - Sends new requests (new session or into an existing one) and aborts a running session.
 
+## Moving and facing the pet
+
+Drag her by the sprite: the window follows the cursor, clamped to the work area. A press
+that moves less than 4px counts as a click and opens the panel instead.
+
+Facing is **not** derived from where the window sits — it is a config value:
+
+```json
+// ~/.cute-pets/config.json
+{ "facing": "left" }
+```
+
+- `"right"` (default) — sprite as authored
+- `"left"` — horizontally mirrored
+- override per launch: `npx electron electron/main.cjs --facing left`
+- double-click the pet to flip and save it
+
 ## Architecture
 
 ```
