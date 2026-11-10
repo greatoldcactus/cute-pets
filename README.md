@@ -77,8 +77,9 @@ attached WSL server, and the brain says so instead of guessing).
 **New chat popover** — prompt, folder, start; four lines instead of a full panel. `Ctrl+N`
 and the pet's right-click menu reach the same thing.
 
-**Pet packs** — Codex/OpenPets-compatible spritesheets (192×208 cells, 8 columns). Import a
-`.zip` or a folder, switch at runtime, mirror the sprite.
+**Pet packs** — Codex/OpenPets-compatible spritesheets (192×208 cells, 8 columns). A
+red-armoured chibi knight ships in the repo and is installed by default; any `.zip` or
+folder can be imported, switched at runtime and mirrored.
 
 **Placement** — the window is a fixed 560×800 with a transparent margin. Dragging clamps the
 *sprite*, not the window, so she can be parked against the top edge. When there is no room
@@ -92,6 +93,18 @@ it just stops appearing on the pet. Persisted in `~/.cute-pets/hidden.json`, res
 ---
 
 ## Pet packs
+
+### The built-in pet
+
+The repo ships one pack, `pets/chibi-knight/` — an original red-armoured chibi knight,
+8 columns × 11 rows of 192×208 cells. It was generated for this project, so a default
+install has a pet that belongs to it rather than borrowing a character from a game.
+
+On first run the brain copies it into `~/.cute-pets/pets/` and makes it the active pet
+if you have not chosen one; `GET /api/pet` serves it straight from the repo even before
+that copy exists. Importing any other pack simply takes over as the active choice — the
+built-in one stays in the list, and deleting `~/.cute-pets/pets/chibi-knight` brings it
+back on the next start.
 
 ```bash
 npm run pets -- list                         # installed pets, * = active
@@ -158,7 +171,8 @@ not verified.
 | Path | What |
 | --- | --- |
 | `~/.cute-pets/config.json` | `facing`, `activePet`, attached `servers` (with credentials) |
-| `~/.cute-pets/pets/<id>/` | imported pet packs |
+| `pets/<id>/` (repo) | packs that ship with cute-pets: `chibi-knight` |
+| `~/.cute-pets/pets/<id>/` | installed pet packs (the built-in one is copied here on first run) |
 | `~/.cute-pets/hidden.json` | sessions hidden from the pet |
 | `~/.cute-pets/brain.json` | written by a running brain |
 | `~/.cute-pets/brain.log` | brain log (same lines as stdout) |
@@ -222,7 +236,9 @@ and `/shot?file=…` — that is how the screenshot above was produced.
 src/main.mjs        hub: discovery, attach, dispatch, hidden persistence
 src/opencode.mjs    v1 client        src/opencode-v2.mjs  v2 client (auth, /api/*, events)
 src/state.mjs       session/state machine, permissions, snapshots
-src/server.mjs      face API + SSE      src/pets.mjs  pet store      src/config.mjs
+src/server.mjs      face API + SSE      src/pets.mjs  pet store + built-in seeding
+src/config.mjs      ~/.cute-pets/config.json
+pets/chibi-knight/  the pack that ships with the repo
 electron/main.cjs   sprite window, drag, dialogs, bounds lock
 faces/web/min.html  the pet window UI   faces/web/index.html  full tray
 ```

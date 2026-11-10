@@ -125,12 +125,14 @@ const short=n=>n>=1000?(n/1000).toFixed(1)+"k":String(n||0);
 let state={pet:{state:"idle",label:""},sessions:[],permissions:[],servers:[]};
 let open=null, lastMsgKey="";
 
-/* ---------- Saber sprite ---------- */
+/* ---------- pet sprite (active pack, served by the brain) ---------- */
 const FW=192,FH=208,FRAMES=8;
 const ROW={idle:0,running:2,waiting:6,error:9};
 const FPS={idle:6,running:11,waiting:5,error:4};
 const COLOR={idle:"#6ee7a8",running:"#5ac8ff",waiting:"#ffc65c",error:"#ff6b6b"};
-const img=new Image(); img.src="/assets/saber/spritesheet.webp";
+const img=new Image();
+// whatever pack is active - the built-in chibi knight unless the user imported one
+fetch("/api/pet").then(r=>r.json()).then(p=>{ if(p&&p.url) img.src=p.url; }).catch(()=>{});
 const cv=$("#pet"), ctx=cv.getContext("2d");
 let petState="idle";
 /* Rows are padded with fully transparent cells: the real animation length differs

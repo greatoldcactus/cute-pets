@@ -1,0 +1,14 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Chibi Knight review</title>
+<style>body{background:#191d27;color:#eee;font:16px system-ui;margin:24px}a{color:#ecc779}main{display:flex;flex-wrap:wrap;gap:20px}figure{margin:0}canvas{width:384px;height:416px;image-rendering:pixelated;background:#232936}button,input{margin:12px}img{max-width:100%;image-rendering:pixelated}p{max-width:900px}</style>
+<h1>Chibi Knight</h1><p>Nine generated key poses; shared 26-colour palette; 88 complete frames. Main loops below run at renderer speeds. Running uses four held key poses plus bounce. Secondary rows repeat main loops. Outlines are approximately one pixel, with local variation.</p>
+<button id="play">Pause</button><label>Frame <input id="frame" type="range" min="0" max="7" value="0"></label><main></main>
+<p><a href="../preview.png">3× first-frame preview</a> · <a href="../spritesheet.webp">Full sheet</a> · <a href="compose.py">Composition script</a> · <a href="prompts.json">Generation prompts</a> · <a href="report.md">Checks and file sizes</a></p>
+<img src="../preview.png" alt="Idle, running, waiting and error, first frames">
+<script>
+const specs=[['Idle',0,6],['Running',2,11],['Waiting',6,5],['Error',9,4]];
+const views=specs.map(([name,row,fps])=>{let f=document.createElement('figure'),c=document.createElement('canvas'),t=document.createElement('figcaption');c.width=192;c.height=208;t.textContent=`${name} — row ${row}, ${fps} fps`;f.append(c,t);document.querySelector('main').append(f);return {c,row,fps}});
+const img=new Image();img.src='../spritesheet.webp';let play=true;
+document.querySelector('#play').onclick=()=>{play=!play;document.querySelector('#play').textContent=play?'Pause':'Play'};
+document.querySelector('#frame').oninput=()=>{play=false;document.querySelector('#play').textContent='Play'};
+function draw(t){for(const {c,row,fps} of views){let g=c.getContext('2d'),f=play?Math.floor(t*fps/1000)%8:+document.querySelector('#frame').value;g.clearRect(0,0,192,208);if(img.complete&&img.naturalWidth)g.drawImage(img,192*f,208*row,192,208,0,0,192,208)}requestAnimationFrame(draw)}requestAnimationFrame(draw);
+</script></html>

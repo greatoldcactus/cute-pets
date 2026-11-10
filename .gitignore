@@ -4,3 +4,8 @@ dist/
 .DS_Store
 .cache/
 demo/
+# pet pack build artifacts: keep the sheet + pet.json, drop the toolchain
+pets/*/_build/_vendor/
+pets/*/_build/poses/
+pets/*/_build/*.pyc
+pets/*/_build/__pycache__/

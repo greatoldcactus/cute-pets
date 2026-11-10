@@ -3,13 +3,46 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { readConfig, writeConfig, stateDir } from "./config.mjs";
 
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
+// The pack that ships with the repo. It is installed on first run and becomes the
+// default pet, so a fresh checkout has something to show without importing anything.
+export const BUILTIN_ID = "chibi-knight";
+
 export function petsDir() {
   return path.join(stateDir(), "pets");
+}
+
+export function builtinDir() {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.join(here, "..", "pets", BUILTIN_ID);
+}
+
+// Idempotent: copy the built-in pack into the store if it is missing, and make it
+// the active pet when the user has not chosen one yet.
+export function ensureBuiltin() {
+  const src = builtinDir();
+  if (!readPetJson(src)) return null;
+  const dest = path.join(petsDir(), BUILTIN_ID);
+  if (!readPetJson(dest)) {
+    ensureDir(petsDir());
+    try {
+      // Only the pack itself: build scripts, source poses and vendored wheels stay
+      // in the repo, not in the user's store.
+      fs.cpSync(src, dest, {
+        recursive: true,
+        filter: (from) => !path.basename(from).startsWith("_"),
+      });
+    } catch {
+      return null;
+    }
+  }
+  if (!readConfig().activePet) writeConfig({ activePet: BUILTIN_ID });
+  return BUILTIN_ID;
 }
 
 function ensureDir(dir) {
@@ -58,6 +91,7 @@ function extractZip(zipPath, target) {
 }
 
 export function listPets() {
+  ensureBuiltin();
   const dir = petsDir();
   const active = readConfig().activePet ?? null;
   if (!fs.existsSync(dir)) return { active, pets: [] };
@@ -81,15 +115,20 @@ export function listPets() {
 export function activePet() {
   const { active, pets } = listPets();
   if (!pets.length) return null;
-  return pets.find((p) => p.id === active) ?? pets[0];
+  const chosen = pets.find((p) => p.id === active) ?? pets[0];
+  return { ...chosen, builtin: chosen.id === BUILTIN_ID };
 }
 
 export function petAsset(petId, relPath) {
-  const root = path.join(petsDir(), petId);
-  const file = path.join(root, relPath);
-  const resolved = path.resolve(file);
-  if (!resolved.startsWith(path.resolve(root) + path.sep)) return null; // traversal guard
-  return fs.existsSync(resolved) ? resolved : null;
+  // Serve from the store, falling back to the shipped pack before it is seeded.
+  const roots = [path.join(petsDir(), petId)];
+  if (petId === BUILTIN_ID) roots.push(builtinDir());
+  for (const root of roots) {
+    const resolved = path.resolve(path.join(root, relPath));
+    if (!resolved.startsWith(path.resolve(root) + path.sep)) return null; // traversal guard
+    if (fs.existsSync(resolved)) return resolved;
+  }
+  return null;
 }
 
 export function usePet(petId) {

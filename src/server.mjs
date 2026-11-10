@@ -3,7 +3,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listPets, importPet, usePet, activePet, petAsset } from "./pets.mjs";
+import { listPets, importPet, usePet, activePet, petAsset, ensureBuiltin, BUILTIN_ID } from "./pets.mjs";
 import { readConfig, writeConfig } from "./config.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -58,12 +58,20 @@ export function startServer({ port, host, store, api }) {
       if (route === "GET /api/pet") {
         const pet = activePet();
         if (!pet) {
-          return json(res, 200, { id: "saber", name: "Saber", fallback: true, url: "/assets/saber/spritesheet.webp" });
+          // Should not happen (ensureBuiltin seeds on boot), but never hand back a
+          // sprite that is not ours.
+          return json(res, 200, {
+            id: BUILTIN_ID,
+            name: "Chibi Knight",
+            fallback: true,
+            url: `/pets/${BUILTIN_ID}/spritesheet.webp`,
+          });
         }
         return json(res, 200, {
           id: pet.id,
           name: pet.name,
           description: pet.description,
+          builtin: !!pet.builtin,
           url: `/pets/${pet.id}/${pet.spritesheetPath}`,
         });
       }
