@@ -1,0 +1,145 @@
+// Local HTTP API + SSE fanout for pet faces (web now, Electron later).
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const WEB_ROOT = path.join(HERE, "..", "faces", "web");
+
+const MIME = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".webp": "image/webp",
+  ".png": "image/png",
+};
+
+function json(res, code, body) {
+  const data = JSON.stringify(body);
+  res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  res.end(data);
+}
+
+async function readBody(req) {
+  const chunks = [];
+  for await (const c of req) {
+    chunks.push(c);
+    if (chunks.reduce((n, b) => n + b.length, 0) > 1 << 20) throw new Error("body too large");
+  }
+  const raw = Buffer.concat(chunks).toString("utf8");
+  if (!raw) return {};
+  try { return JSON.parse(raw); } catch { throw new Error("invalid json"); }
+}
+
+export function startServer({ port, host, store, api }) {
+  const clients = new Set();
+
+  const broadcast = (snap) => {
+    const payload = `event: state\ndata: ${JSON.stringify(snap)}\n\n`;
+    for (const res of clients) {
+      try { res.write(payload); } catch { clients.delete(res); }
+    }
+  };
+
+  store.on(broadcast);
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const route = `${req.method} ${url.pathname}`;
+    try {
+      if (route === "GET /api/health") return json(res, 200, { ok: true, uptime: process.uptime() });
+
+      if (route === "GET /api/state") return json(res, 200, store.snapshot());
+
+      if (route === "GET /api/events") {
+        res.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-store",
+          connection: "keep-alive",
+        });
+        res.write("retry: 2000\n\n");
+        res.write(`event: state\ndata: ${JSON.stringify(store.snapshot())}\n\n`);
+        clients.add(res);
+        const beat = setInterval(() => {
+          try { res.write(": ping\n\n"); } catch {}
+        }, 20000);
+        req.on("close", () => {
+          clearInterval(beat);
+          clients.delete(res);
+        });
+        return;
+      }
+
+      if (route === "POST /api/announce") {
+        const body = await readBody(req);
+        if (!body.serverUrl) return json(res, 400, { error: "serverUrl required" });
+        let client = await api.attach(body.serverUrl, { directory: body.directory ?? null });
+        let via = "announce";
+        if (!client) {
+          // The announced URL is often the configured default, not the real port.
+          const found = await api.discover();
+          via = "scan";
+          client = found.attached.length ? true : null;
+        }
+        return json(res, 200, {
+          ok: Boolean(client),
+          via,
+          attached: store.snapshot().servers.map((s) => s.url),
+        });
+      }
+
+      if (route === "POST /api/prompt") {
+        const body = await readBody(req);
+        if (!body.text || typeof body.text !== "string") return json(res, 400, { error: "text required" });
+        const out = await api.prompt({
+          server: body.server ?? null,
+          sessionId: body.sessionId ?? null,
+          newSession: Boolean(body.newSession),
+          title: body.title ?? null,
+          text: body.text,
+        });
+        return json(res, 200, out);
+      }
+
+      if (route === "POST /api/abort") {
+        const body = await readBody(req);
+        const out = await api.abort({ server: body.server ?? null, sessionId: body.sessionId });
+        return json(res, 200, out);
+      }
+
+      if (route === "POST /api/permission") {
+        const body = await readBody(req);
+        const out = await api.replyPermission({ id: body.id, reply: body.reply });
+        return json(res, 200, out);
+      }
+
+      if (route === "GET /api/messages") {
+        const server = url.searchParams.get("server");
+        const sessionId = url.searchParams.get("sessionId");
+        const limit = Number(url.searchParams.get("limit") ?? 20);
+        const out = await api.messages({ server, sessionId, limit });
+        return json(res, 200, out);
+      }
+
+      if (req.method === "GET") {
+        const rel = url.pathname === "/" ? "index.html" : url.pathname.replace(/^\/+/, "");
+        const file = path.join(WEB_ROOT, rel);
+        if (!file.startsWith(WEB_ROOT)) return json(res, 403, { error: "forbidden" });
+        if (fs.existsSync(file) && fs.statSync(file).isFile()) {
+          res.writeHead(200, { "content-type": MIME[path.extname(file)] ?? "application/octet-stream" });
+          return fs.createReadStream(file).pipe(res);
+        }
+      }
+
+      return json(res, 404, { error: "not found", route });
+    } catch (err) {
+      return json(res, 500, { error: String(err?.message ?? err) });
+    }
+  });
+
+  return new Promise((resolve) => {
+    server.listen(port, host, () => resolve({ server, port: server.address().port }));
+  });
+}
