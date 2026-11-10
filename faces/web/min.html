@@ -74,6 +74,7 @@ border-radius:10px;box-shadow:0 -10px 26px rgba(0,0,0,.5);overflow:hidden;displa
 .pitem{display:flex;gap:8px;padding:6px 10px;cursor:pointer;align-items:baseline}
 .pitem:hover,.pitem.sel{background:#222736}
 .pitem .n{font-family:ui-monospace,monospace;font-size:11.5px;color:#9fd2ff;flex:none}
+.pitem .n.pet{color:#8ee0b0}
 .pitem .d{font-size:10.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* pet */
 .petzone{position:absolute;right:0;bottom:0;width:260px;height:300px;display:flex;flex-direction:column;
@@ -125,6 +126,7 @@ font:inherit;font-size:12px;padding:6px 9px;border-radius:7px;cursor:pointer}
       </aside>
       <section class="col detail">
         <div class="dhead"><span class="chip idle" id="dstate">idle</span><div class="t" id="dtitle">Nothing selected</div>
+          <span class="ssub" id="dmeta" style="flex:none"></span>
           <button class="pbtn" id="dabort" style="display:none">stop</button></div>
         <div class="dbody" id="dbody"></div>
       </section>
@@ -255,6 +257,7 @@ function renderDetail(){
     : view==="pets" ? "Pets" : view==="settings" ? "Settings"
     : s?s.title:"Nothing selected";
   $("#dabort").style.display = s&&s.state==="running" ? "" : "none";
+  $("#dmeta").textContent = s ? [s.model?.id, s.agent].filter(Boolean).join(" · ") : "";
   const body=$("#dbody");
   if(view==="new"){ body.innerHTML=newChatHtml(); return; }
   if(view==="pets"){ body.innerHTML=petsHtml(); return; }
@@ -362,25 +365,105 @@ async function startNewChat(){
 }
 
 /* ---------------- composer + command palette ---------------- */
+// Commands the pet implements itself. `GET /command` only returns prompt-template
+// commands (init/review/…), because /model, /new, /share and friends are TUI-client
+// commands that never reach the server. Those are re-implemented here on the API.
+const PET_CMDS=[
+  {name:"new",      d:"start a chat in a folder",           run:()=>{ setExpanded(true); newDir=workspaces[0]?.directory||null; showView("new"); }},
+  {name:"sessions", d:"show the session list",              run:()=>{ setExpanded(true); showView("chat"); }},
+  {name:"model",    d:"switch the model for this session",  pick:"model"},
+  {name:"agent",    d:"switch agent (build, plan, explore)",pick:"agent"},
+  {name:"compact",  d:"summarize this conversation",        act:"compact"},
+  {name:"undo",     d:"revert the last message",            act:"undo"},
+  {name:"redo",     d:"restore reverted messages",          act:"redo"},
+  {name:"share",    d:"create a share link",                act:"share"},
+  {name:"abort",    d:"stop the running session",           act:"abort"},
+  {name:"pets",     d:"choose the pet",                     run:()=>{ setExpanded(true); showView("pets"); }},
+  {name:"settings", d:"facing, config, paths",              run:()=>{ setExpanded(true); showView("settings"); }},
+  {name:"help",     d:"list available commands",            run:()=>{ setExpanded(true); openPalette(""); }},
+];
+let modelsList=[], agentsList=[], palMode="root";
+
 const pal=$("#palette"); let palSel=0, palItems=[];
 async function loadCommands(){
   const s=currentSession();
   try{
     const q=s?`?server=${encodeURIComponent(s.server)}`:"";
-    const r=await (await fetch("/api/commands"+q)).json();
-    commands=r.commands||[];
+    commands=(await (await fetch("/api/commands"+q)).json()).commands||[];
   }catch{ commands=[]; }
 }
-function openPalette(prefix){
-  palItems=commands.filter(c=>c.name.toLowerCase().startsWith(prefix.toLowerCase()));
+async function ensureModels(){
+  if(modelsList.length) return modelsList;
+  const s=currentSession();
+  try{
+    const q=s?`?server=${encodeURIComponent(s.server)}`:"";
+    modelsList=(await (await fetch("/api/models"+q)).json()).models||[];
+  }catch{ modelsList=[]; }
+  return modelsList;
+}
+async function ensureAgents(){
+  if(agentsList.length) return agentsList;
+  const s=currentSession();
+  try{
+    const q=s?`?server=${encodeURIComponent(s.server)}`:"";
+    agentsList=(await (await fetch("/api/agents"+q)).json()).agents||[];
+  }catch{ agentsList=[]; }
+  return agentsList;
+}
+
+function openPalette(prefix="",mode="root"){
+  palMode=mode;
+  const q=prefix.toLowerCase();
+  if(mode==="models"){
+    palItems=modelsList.map(m=>({kind:"model",label:m.id,sub:`${m.providerID}${m.free?" · free":""}${m.default?" · default":""}`,value:m}));
+  }else if(mode==="agents"){
+    palItems=agentsList.map(a=>({kind:"agent",label:a.name,sub:a.description||a.mode||"",value:a.name}));
+  }else{
+    palItems=[
+      ...commands.filter(c=>c.name.toLowerCase().startsWith(q))
+        .map(c=>({kind:"command",label:"/"+c.name,sub:c.description||""})),
+      ...PET_CMDS.filter(c=>c.name.toLowerCase().startsWith(q))
+        .map(c=>({kind:"pet",label:"/"+c.name,sub:c.d})),
+    ];
+  }
   palSel=0;
   pal.classList.toggle("on",palItems.length>0);
-  pal.innerHTML=palItems.map((c,i)=>`<div class="pitem ${i===0?"sel":""}" data-cmd="${esc(c.name)}">
-      <span class="n">/${esc(c.name)}</span><span class="d">${esc(c.description||"")}</span></div>`).join("");
+  pal.innerHTML=palItems.map((it,i)=>`<div class="pitem ${i===0?"sel":""}" data-i="${i}">
+      <span class="n${it.kind==="pet"?" pet":""}">${esc(it.label)}</span><span class="d">${esc(it.sub)}</span></div>`).join("");
 }
-function closePalette(){ pal.classList.remove("on"); palItems=[]; }
+function closePalette(){ pal.classList.remove("on"); pal.innerHTML=""; palItems=[]; palMode="root"; }
+
+async function choosePalette(i){
+  const it=palItems[i]; if(!it) return;
+  if(it.kind==="command"){ $("#prompt").value=it.label+" "; closePalette(); $("#prompt").focus(); return; }
+  if(it.kind==="model"||it.kind==="agent"){
+    const s=currentSession();
+    if(!s){ closePalette(); return; }
+    try{ await post("/api/session/action",{server:s.server,sessionId:s.id,action:it.kind,value:it.value}); }catch(e){ alert(String(e)); }
+    closePalette(); $("#prompt").value=""; msgKey=""; return;
+  }
+  const cmd=PET_CMDS.find(c=>"/"+c.name===it.label);
+  closePalette(); $("#prompt").value="";
+  if(!cmd) return;
+  if(cmd.pick==="model"){ await ensureModels(); openPalette("","models"); return; }
+  if(cmd.pick==="agent"){ await ensureAgents(); openPalette("","agents"); return; }
+  if(cmd.run) return cmd.run();
+  if(cmd.act) return runAction(cmd.act);
+}
+
+async function runAction(act){
+  const s=currentSession();
+  if(!s){ alert("pick a session first"); return; }
+  try{
+    if(act==="abort"){ await post("/api/abort",{server:s.server,sessionId:s.id}); return; }
+    const r=await post("/api/session/action",{server:s.server,sessionId:s.id,action:act});
+    if(act==="share"&&r.url){ try{ await navigator.clipboard.writeText(r.url); alert("Share link copied:\n"+r.url); }catch{ alert("Share link:\n"+r.url); } }
+  }catch(e){ alert(String(e)); }
+}
+
 $("#prompt").addEventListener("input",e=>{
   const v=e.target.value;
+  if(palMode!=="root"){ if(!v.startsWith("/")) closePalette(); else openPalette(v.slice(1).split(" ")[0], palMode); return; }
   if(v.startsWith("/")) openPalette(v.slice(1).split(" ")[0]);
   else closePalette();
 });
@@ -390,32 +473,45 @@ $("#prompt").addEventListener("keydown",e=>{
     e.preventDefault();
     palSel=(palSel+(e.key==="ArrowDown"?1:-1)+palItems.length)%palItems.length;
     [...pal.children].forEach((el,i)=>el.classList.toggle("sel",i===palSel));
-  } else if(e.key==="Tab"||e.key==="Enter"){
-    if(!palItems.length) return;
-    e.preventDefault();
-    $("#prompt").value="/"+palItems[palSel].name+" ";
-    closePalette();
-    if(e.key==="Enter") $("#composer").requestSubmit();
+    pal.children[palSel]?.scrollIntoView({block:"nearest"});
+  } else if(e.key==="Tab"){
+    e.preventDefault(); choosePalette(palSel);
+  } else if(e.key==="Enter"){
+    e.preventDefault(); choosePalette(palSel);
   } else if(e.key==="Escape"){ closePalette(); }
 });
 pal.addEventListener("click",e=>{
-  const it=e.target.closest("[data-cmd]"); if(!it) return;
-  $("#prompt").value="/"+it.dataset.cmd+" "; closePalette(); $("#prompt").focus();
+  const it=e.target.closest("[data-i]"); if(!it) return;
+  choosePalette(Number(it.dataset.i));
 });
 
 $("#composer").addEventListener("submit",async e=>{
   e.preventDefault();
   const raw=$("#prompt").value.trim(); if(!raw) return;
   const s=currentSession();
-  try{
-    if(raw.startsWith("/")){
-      const [name,...rest]=raw.slice(1).split(" ");
+
+  // a pet command typed in full runs locally (/model, /undo, …)
+  if(raw.startsWith("/")){
+    const [name,...rest]=raw.slice(1).split(" ");
+    const pet=PET_CMDS.find(c=>c.name===name);
+    if(pet){
+      $("#prompt").value="";
+      if(pet.pick==="model"){ await ensureModels(); openPalette("","models"); return; }
+      if(pet.pick==="agent"){ await ensureAgents(); openPalette("","agents"); return; }
+      if(pet.run) return pet.run();
+      if(pet.act) return runAction(pet.act);
+    }
+    try{
       await post("/api/prompt",{sessionId:s?s.id:null,server:s?s.server:null,newSession:!s,
         command:name,text:rest.join(" "),title:`/${name}`});
-    }else{
-      await post("/api/prompt",{sessionId:s?s.id:null,server:s?s.server:null,newSession:!s,text:raw});
-    }
-    $("#prompt").value=""; closePalette(); msgKey="";
+      $("#prompt").value=""; msgKey="";
+    }catch(err){ alert(String(err)); }
+    return;
+  }
+
+  try{
+    await post("/api/prompt",{sessionId:s?s.id:null,server:s?s.server:null,newSession:!s,text:raw});
+    $("#prompt").value=""; msgKey="";
     if(s) setTimeout(()=>loadMessages(s),700);
   }catch(err){ alert(String(err)); }
 });

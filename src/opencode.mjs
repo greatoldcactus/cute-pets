@@ -45,6 +45,17 @@ export class OpenCodeClient {
     });
   }
   path() { return this.get("/path"); }
+  models() { return this.get("/config/providers"); }
+  agents() { return this.get("/agent"); }
+  setModel(id, ref) { return this.post(`/api/session/${enc(id)}/model`, { model: ref }); }
+  setAgent(id, agent) { return this.post(`/api/session/${enc(id)}/agent`, { agent }); }
+  summarize(id, providerID, modelID) {
+    return this.post(`/session/${enc(id)}/summarize`, { providerID, modelID });
+  }
+  share(id) { return this.post(`/session/${enc(id)}/share`, {}); }
+  unshare(id) { return this.#req(`/session/${enc(id)}/share`, { method: "DELETE" }); }
+  revert(id, messageID) { return this.post(`/session/${enc(id)}/revert`, { messageID }); }
+  unrevert(id) { return this.post(`/session/${enc(id)}/unrevert`, {}); }
   createSession(body = {}) { return this.post("/session", body); }
   prompt(id, text, extra = {}) {
     return this.post(`/session/${enc(id)}/prompt_async`, { parts: [{ type: "text", text }], ...extra });
