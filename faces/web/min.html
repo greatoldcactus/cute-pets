@@ -86,6 +86,7 @@ box-shadow:0 16px 36px rgba(0,0,0,.6)}
 body.mini-open .mini{display:flex;bottom:226px}
 body.mini-open.flip .mini{bottom:auto;top:226px}
 body.mini-open .panel{display:none}
+body.switching .panel,body.switching .mini{visibility:hidden}
 .mini textarea{min-height:56px}
 .petzone{position:absolute;right:0;bottom:0;width:260px;height:222px;display:flex;flex-direction:column;
 align-items:center;justify-content:flex-end;padding-bottom:2px}
@@ -101,6 +102,9 @@ border:1px solid var(--line);border-radius:11px;padding:5px 9px;font:inherit;fon
 cursor:pointer;box-shadow:0 6px 16px rgba(0,0,0,.45)}
 .bub:hover{border-color:var(--line2)}
 .bub i{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:none}
+.bub.done{opacity:.82;border-style:dashed}
+.bub.done i{background:#6ee7a8}
+.bub.done span{color:#b9c2d6}
 .bub.waiting i{background:var(--wait)}.bub.running i{background:var(--run)}.bub.error i{background:var(--err)}
 .bub span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* tooltip + context menu */
@@ -172,6 +176,7 @@ const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",
 const api=window.cp||{setExpanded(){},setIgnore(){},setFacing(){},onFacing(){},pickFolder:async()=>({ok:false})};
 const B="";
 let state={pet:{state:"idle"},sessions:[],permissions:[],servers:[]};
+let finishedIds=[], prevStates=new Map(), firstRender=false;   // sessions that ended while we were watching
 let expanded=false, selected=null, view="chat", filter="all", commands=[], newDir=null, workspaces=[];
 
 /* ---------------- sprite ---------------- */
@@ -224,6 +229,7 @@ async function post(path, body){
   return j;
 }
 const PANEL_H=574;
+let showPanelTimer=null;
 let lastLayout=0;   // setExpanded moves the window; a click that lands right after is noise
 function petRect(){ return cv.getBoundingClientRect(); }
 
@@ -266,6 +272,12 @@ function fitOnScreen(){
 function setExpanded(on){
   if(on===expanded) return;
   lastLayout=Date.now();
+  // The window moves by the panel height when the pet flips sides; until that move
+  // lands the freshly laid out panel would be painted at the old place for a frame.
+  // Hide it for those frames instead of letting it flash at the top.
+  document.body.classList.add("switching");
+  clearTimeout(showPanelTimer);
+  showPanelTimer=setTimeout(()=>document.body.classList.remove("switching"),80);
   const before=petRect().top;
   expanded=on;
   document.body.classList.toggle("expanded",on);
@@ -293,8 +305,15 @@ const currentSession=()=>state.sessions.find(s=>s.id===selected)||null;
 function renderBubbles(){
   const act=state.sessions.filter(s=>s.state!=="idle")
     .sort((a,b)=>(a.state==="waiting"?0:1)-(b.state==="waiting"?0:1)).slice(0,3);
-  $("#bubbles").innerHTML=act.map(s=>`<button class="bub ${s.state}" data-session="${esc(s.id)}">
-      <i></i><span>${esc(s.title)}</span></button>`).join("");
+  // Sessions that finished while the pet was running keep a bubble until they are
+  // hidden (or fall out of the list of the last few).
+  const shown=new Set(act.map(s=>s.id));
+  const done=finishedIds.map(id=>state.sessions.find(s=>s.id===id))
+    .filter(s=>s&&!shown.has(s.id)).slice(0,2);
+  $("#bubbles").innerHTML=[...act.map(s=>`<button class="bub ${s.state}" data-session="${esc(s.id)}">
+      <i></i><span>${esc(s.title)}</span></button>`),
+    ...done.map(s=>`<button class="bub done" data-session="${esc(s.id)}" title="finished - right-click to hide">
+      <i></i><span>&#10003; ${esc(s.title)}</span></button>`)].join("");
 }
 function renderList(){
   const dirs=[...new Set(state.sessions.map(s=>s.dirName).filter(Boolean))].sort();
@@ -404,6 +423,22 @@ async function renderPetsList(){
 }
 
 function render(){
+  // remember what just finished: running/waiting/error -> idle
+  const live=new Set(state.sessions.map(s=>s.id));
+  for(const s of state.sessions){
+    const was=prevStates.get(s.id);
+    if(was && was!=="idle" && s.state==="idle")
+      finishedIds=[s.id,...finishedIds.filter(x=>x!==s.id)].slice(0,4);
+    prevStates.set(s.id,s.state);
+  }
+  for(const k of [...prevStates.keys()]) if(!live.has(k)) prevStates.delete(k);
+  if(!firstRender){
+    firstRender=true;
+    const recent=state.sessions.filter(s=>s.state==="idle"&&s.lastText&&Date.now()-(s.updatedAt||0)<15*60*1000)
+      .sort((a,b)=>b.updatedAt-a.updatedAt).slice(0,2).map(s=>s.id);
+    finishedIds=[...new Set([...finishedIds,...recent])].slice(0,4);
+  }
+  finishedIds=finishedIds.filter(id=>live.has(id));
   petState=(state.pet&&state.pet.state)||"idle";
   $("#dot").className="dot "+petState;
   const c=state.pet?.counts||{};
@@ -676,6 +711,7 @@ ctx.addEventListener("click",async e=>{
   if(act==="s-abort"){ const s=state.sessions.find(x=>x.id===sid); if(s) try{ await post("/api/abort",{server:s.server,sessionId:s.id}); }catch(err){} return; }
   if(act==="s-hide"){ const s=state.sessions.find(x=>x.id===sid); if(!s) return;
     try{ await post("/api/session/hide",{server:s.server,sessionId:s.id,hidden:true});
+      finishedIds=finishedIds.filter(x=>x!==sid);
       if(selected===sid){ selected=null; msgKey=""; } }catch(err){ alert(String(err)); }
     return; }
   if(act==="s-unhide"){ try{ await post("/api/session/hide",{sessionId:sid,hidden:false}); }catch(err){ alert(String(err)); } return; }
