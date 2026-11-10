@@ -144,6 +144,17 @@ Precedence: `--facing` CLI flag → config file → default. Changing facing in 
 (double-click) writes the file, so it survives restarts. Window position is also worth
 persisting later; it is desktop-owned state, not a session concern.
 
+## 7c. Remote / WSL servers
+
+- `POST /api/attach` / `/api/detach` attach by URL; attached URLs persist in
+  `~/.cute-pets/config.json` (`servers`) and are re-attached at startup.
+- A workspace is matched by the server's own `GET /path.directory`, **not** by session
+  directories: every opencode process reports every session (shared store), so session
+  directories cannot identify a server.
+- On Windows, a new chat with a POSIX path is rejected with instructions to attach the
+  WSL server instead of spawning a local one.
+- OpenCode 2.x uses `/api/*` with auth and is not supported by this client (see README).
+
 ## 8. Risks to verify
 
 1. **Two writers.** Chatting from the pet while the TUI has the same session open — does

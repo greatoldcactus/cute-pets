@@ -5,6 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { readConfig, writeConfig } from "./config.mjs";
 import { PetState, STATE } from "./state.mjs";
 import { OpenCodeClient } from "./opencode.mjs";
 import { findOpencodePorts } from "./discover.mjs";
@@ -84,11 +85,21 @@ class Hub {
       return null;
     }
     client.online = true;
-    this.store.addServer(clean, { directory });
+    let workdir = directory;
+    try {
+      workdir = (await client.get("/path"))?.directory ?? directory;
+    } catch {}
+    this.store.addServer(clean, { directory: workdir });
     this.store.setServerOnline(clean, true);
-    const entry = { client, controller: null, attempts: 0 };
+    const entry = { client, controller: null, attempts: 0, workdir };
     this.clients.set(clean, entry);
     log(`attached ${clean} (opencode ${health?.version ?? "?"})`);
+    try {
+      const cfg = readConfig();
+      const servers = new Set(cfg.servers ?? []);
+      servers.add(clean);
+      writeConfig({ servers: [...servers] });
+    } catch {}
     await this.sync(clean);
     this.#restartStream(clean);
     return client;
@@ -212,15 +223,23 @@ class Hub {
   // Sessions live inside a server that is bound to one directory. A new chat in
   // another folder therefore needs its own `opencode serve` there.
   async ensureWorkspace(directory) {
-    const dir = path.resolve(String(directory));
+    const raw = String(directory);
+    if (process.platform === "win32" && raw.startsWith("/")) {
+      throw new Error(
+        `"${raw}" is a Linux path. Start the server inside WSL and attach it instead: ` +
+        `opencode serve --hostname 0.0.0.0 --port 4096, then POST /api/attach {"url":"http://localhost:4096"}`,
+      );
+    }
+    const dir = path.resolve(raw);
     if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
       throw new Error(`not a directory: ${dir}`);
     }
-    for (const [url] of this.clients) {
-      const hit = [...this.store.sessions.values()].some(
-        (s) => s.server === url && s.directory && path.resolve(s.directory) === dir,
-      );
-      if (hit) return { server: url, directory: dir, reused: true };
+    const norm = (p) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
+    const want = norm(dir);
+    for (const [url, entry] of this.clients) {
+      if (entry.workdir && norm(entry.workdir) === want) {
+        return { server: url, directory: dir, reused: true };
+      }
     }
     const port = await freePort();
     const url = `http://127.0.0.1:${port}`;
@@ -336,10 +355,15 @@ class Hub {
   }
 
   async prompt({ server, sessionId, newSession, title, text, command, directory }) {
-    let url = this.pickServer(server);
-    if (!url && directory) {
+    // A new chat in an explicit folder must land in THAT folder's server, not the
+    // default one. ensureWorkspace reuses an attached server for the directory or
+    // spawns one (and refuses Linux paths on Windows).
+    let url = null;
+    if (!sessionId && !server && directory) {
       const ws = await this.ensureWorkspace(directory);
       url = ws.server;
+    } else {
+      url = this.pickServer(server);
     }
     if (!url) throw new Error("no opencode server attached");
     let entry = this.clients.get(url);
@@ -443,6 +467,9 @@ writeDiscovery(port, args.host);
 log(`face API on http://${args.host}:${port}`);
 
 for (const url of args.servers) await hub.attach(url);
+for (const url of readConfig().servers ?? []) {
+  if (!args.servers.includes(url)) await hub.attach(url).catch(() => {});
+}
 await hub.discover();
 setInterval(() => { void hub.discover(); }, 10_000);
 log("scanning for opencode servers every 10s");
