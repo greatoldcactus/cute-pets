@@ -77,6 +77,16 @@ border-radius:10px;box-shadow:0 -10px 26px rgba(0,0,0,.5);overflow:hidden;displa
 .pitem .n.pet{color:#8ee0b0}
 .pitem .d{font-size:10.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* pet */
+body.flip .panel{top:226px;bottom:4px}
+body.flip .petzone{top:0;bottom:auto}
+body.flip .bubbles{bottom:auto;top:220px}
+.mini{position:absolute;right:6px;width:396px;display:none;flex-direction:column;gap:6px;
+background:rgba(16,18,25,.98);border:1px solid var(--line);border-radius:12px;padding:9px;
+box-shadow:0 16px 36px rgba(0,0,0,.6)}
+body.mini-open .mini{display:flex;bottom:226px}
+body.mini-open.flip .mini{bottom:auto;top:226px}
+body.mini-open .panel{display:none}
+.mini textarea{min-height:56px}
 .petzone{position:absolute;right:0;bottom:0;width:260px;height:222px;display:flex;flex-direction:column;
 align-items:center;justify-content:flex-end;padding-bottom:2px}
 body.expanded .petzone{opacity:.92}
@@ -135,6 +145,17 @@ font:inherit;font-size:12px;padding:6px 9px;border-radius:7px;cursor:pointer}
       <input id="prompt" placeholder="Message the selected session — / for commands" autocomplete="off">
       <button type="submit">&#9166;</button>
     </form>
+  </section>
+
+  <section class="mini" id="mini">
+    <div class="row" style="gap:6px">
+      <b style="font-size:11.5px">New chat</b>
+      <span class="ssub" id="miniDir" style="flex:1;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+      <button class="pbtn" id="miniDirBtn" title="Choose folder">folder</button>
+      <button class="pbtn" id="miniX" title="Close">&#10005;</button>
+    </div>
+    <textarea id="miniText" placeholder="What should OpenCode do?"></textarea>
+    <div class="row"><button class="pbtn ok" id="miniGo" style="flex:1">Start chat</button></div>
   </section>
 
   <div class="petzone">
@@ -202,11 +223,25 @@ async function post(path, body){
   if(!r.ok) throw new Error(j.error||r.status);
   return j;
 }
+const PANEL_H=574;
+let lastLayout=0;   // setExpanded moves the window; a click that lands right after is noise
+function petRect(){ return cv.getBoundingClientRect(); }
 function setExpanded(on){
+  if(on===expanded) return;
+  lastLayout=Date.now();
+  const before=petRect().top;
   expanded=on;
   document.body.classList.toggle("expanded",on);
   document.body.classList.toggle("minimized",!on);
+  // If there is no room above the pet for the panel, render it below instead and
+  // move the window down by the same amount so the pet does not appear to jump.
+  const petTopScreen=window.screenY+before;
+  const flip=on && petTopScreen < PANEL_H+12;
+  document.body.classList.toggle("flip",flip);
+  const after=petRect().top;
+  if(api.moveBy && before!==after) api.moveBy(0, Math.round(before-after));
   api.setExpanded(on);
+  if(!on) document.body.classList.remove("mini-open");
 }
 function showView(v){ view=v; render(); }
 const currentSession=()=>state.sessions.find(s=>s.id===selected)||null;
@@ -338,7 +373,10 @@ document.addEventListener("click",async e=>{
   if(pet){ try{ await post("/api/pets/active",{id:pet.dataset.pet}); await loadPet(); renderPetsList(); }catch(err){} return; }
   const face=e.target.closest("[data-facing]");
   if(face){ facing=face.dataset.facing; applyFacing(); api.setFacing(facing); render(); return; }
-  if(e.target.id==="btnNew"){ setExpanded(true); newDir=workspaces[0]?.directory||null; showView("new"); return; }
+  if(e.target.id==="btnNew"){ openMini(); return; }
+  if(e.target.id==="miniX"){ setExpanded(false); return; }
+  if(e.target.id==="miniDirBtn"){ const r=await api.pickFolder(); if(r&&r.ok){ newDir=r.path; $("#miniDir").textContent=r.path; } return; }
+  if(e.target.id==="miniGo"){ await startMini(); return; }
   if(e.target.id==="btnSettings"){ setExpanded(true); showView("settings"); return; }
   if(e.target.id==="collapse"){ setExpanded(false); return; }
   if(e.target.id==="dabort"){ const s=currentSession(); if(s) try{ await post("/api/abort",{server:s.server,sessionId:s.id}); }catch(err){} return; }
@@ -352,6 +390,25 @@ document.addEventListener("click",async e=>{
 });
 
 $("#filter").addEventListener("change",render);
+
+function openMini(){
+  newDir=newDir||workspaces[0]?.directory||null;
+  setExpanded(true);
+  document.body.classList.add("mini-open");
+  $("#miniDir").textContent=newDir||"no folder";
+  $("#miniDir").textContent=newDir||"no folder";
+  setTimeout(()=>$("#miniText").focus(),60);
+}
+async function startMini(){
+  const text=$("#miniText").value.trim(); if(!text) return;
+  const dir=newDir||null;
+  try{
+    const r=await post("/api/prompt",{newSession:true,text,directory:dir});
+    $("#miniText").value="";
+    selected=r.sessionId; msgKey=""; showView("chat");
+    document.body.classList.remove("mini-open");
+  }catch(e){ alert(String(e)); }
+}
 
 async function startNewChat(){
   const text=$("#newtext")?.value.trim(); if(!text) return;
@@ -517,14 +574,37 @@ $("#composer").addEventListener("submit",async e=>{
 
 /* ---------------- pet: drag, click, context menu ---------------- */
 let drag=null;
-cv.addEventListener("mousedown",e=>{ if(e.button!==0) return; drag={x:e.screenX,y:e.screenY,moved:0}; api.dragBegin({x:e.screenX,y:e.screenY}); });
+cv.addEventListener("mousedown",e=>{ if(e.button!==0||!e.isTrusted) return;
+  const r=cv.getBoundingClientRect();
+  drag={x:e.screenX,y:e.screenY,moved:0};
+  api.dragBegin({x:e.screenX,y:e.screenY,pet:{x:r.left,y:r.top,width:r.width,height:r.height}}); });
 window.addEventListener("mousemove",e=>{ if(!drag) return;
   drag.moved=Math.max(drag.moved,Math.abs(e.screenX-drag.x)+Math.abs(e.screenY-drag.y));
   api.dragMove({x:e.screenX,y:e.screenY}); });
-window.addEventListener("mouseup",()=>{ if(!drag) return; const moved=drag.moved; drag=null; api.dragEnd();
-  if(moved<4) setExpanded(!expanded); });
+window.addEventListener("mouseup",e=>{ if(!drag) return; const moved=drag.moved; drag=null; api.dragEnd();
+  // only a real click toggles the panel; ignored when a window move re-synthesises one
+  if(moved<4 && e.isTrusted && Date.now()-lastLayout>600) setExpanded(!expanded); });
 
 const ctx=$("#ctx");
+function placeMenu(el,x,y){
+  const pet=petRect(), w=el.offsetWidth, hgt=el.offsetHeight;
+  let px=x, py=y;
+  const roomLeft=pet.left, roomRight=innerWidth-pet.right;
+  if(roomLeft>w+14) px=Math.min(x,pet.left-w-10);
+  else if(roomRight>w+14) px=Math.max(x,pet.right+10);
+  py=Math.min(Math.max(6,y),innerHeight-hgt-6);
+  if(px+w>pet.left && px<pet.right && py+hgt>pet.top && py<pet.bottom){
+    py=Math.max(6,pet.top-hgt-10);
+  }
+  el.style.left=Math.max(6,Math.min(px,innerWidth-w-6))+"px";
+  el.style.top=py+"px";
+}
+function showMenu(items,x,y){
+  ctx.innerHTML=items.map(it=>it==="sep"?`<div class="sep"></div>`
+    :`<button data-act="${esc(it.act)}"${it.id?` data-sid="${esc(it.id)}"`:""}>${esc(it.label)}${it.key?`<span class="k">${esc(it.key)}</span>`:""}</button>`).join("");
+  ctx.classList.add("on");
+  placeMenu(ctx,x,y);
+}
 cv.addEventListener("contextmenu",e=>{
   e.preventDefault();
   const items=[
@@ -534,14 +614,18 @@ cv.addEventListener("contextmenu",e=>{
   ctx.innerHTML=items.map(([label,act,key])=>label==="sep"?`<div class="sep"></div>`
     :`<button data-act="${act}">${label}${key?`<span class="k">${key}</span>`:""}</button>`).join("");
   ctx.classList.add("on");
-  const w=ctx.offsetWidth, h=ctx.offsetHeight;
-  ctx.style.left=Math.min(e.clientX, innerWidth-w-6)+"px";
-  ctx.style.top=Math.min(e.clientY, innerHeight-h-6)+"px";
+  placeMenu(ctx, e.clientX, e.clientY);
 });
 ctx.addEventListener("click",async e=>{
-  const act=e.target.closest("[data-act]")?.dataset.act; if(!act) return;
-  hideCtx();
-  if(act==="new"){ setExpanded(true); newDir=workspaces[0]?.directory||null; showView("new"); }
+  const btn=e.target.closest("[data-act]"); const act=btn?.dataset.act; if(!act) return;
+  const sid=btn?.dataset.sid; hideCtx();
+  if(act==="s-open"){ selected=sid; msgKey=""; setExpanded(true); showView("chat"); return; }
+  if(act==="s-abort"){ const s=state.sessions.find(x=>x.id===sid); if(s) try{ await post("/api/abort",{server:s.server,sessionId:s.id}); }catch(err){} return; }
+  if(act==="s-close"){ const s=state.sessions.find(x=>x.id===sid); if(!s) return;
+    if(!confirm(`Close "${s.title}"?\nThis deletes the session in OpenCode.`)) return;
+    try{ await post("/api/session/close",{server:s.server,sessionId:s.id}); if(selected===sid){ selected=null; msgKey=""; } }catch(err){ alert(String(err)); }
+    return; }
+  if(act==="new"){ openMini(); }
   if(act==="sessions"){ setExpanded(true); showView("chat"); }
   if(act==="pets"){ setExpanded(true); showView("pets"); }
   if(act==="settings"){ setExpanded(true); showView("settings"); }
@@ -549,10 +633,21 @@ ctx.addEventListener("click",async e=>{
   if(act==="quit"){ api.quit(); }
 });
 function hideCtx(){ ctx.classList.remove("on"); }
+document.addEventListener("contextmenu",e=>{
+  const row=e.target.closest("[data-session]"); if(!row) return;
+  e.preventDefault();
+  const s=state.sessions.find(x=>x.id===row.dataset.session); if(!s) return;
+  showMenu([
+    {label:"Open",act:"s-open",id:s.id},
+    ...(s.state==="running"?[{label:"Stop",act:"s-abort",id:s.id}]:[]),
+    "sep",
+    {label:"Close session",act:"s-close",id:s.id},
+  ], e.clientX, e.clientY);
+});
 document.addEventListener("mousedown",e=>{ if(!e.target.closest("#ctx")&&!e.target.closest("#pet")) hideCtx(); });
 window.addEventListener("keydown",e=>{
   if(e.key==="Escape"){ hideCtx(); closePalette(); }
-  if(e.ctrlKey&&e.key.toLowerCase()==="n"){ e.preventDefault(); setExpanded(true); newDir=workspaces[0]?.directory||null; showView("new"); }
+  if(e.ctrlKey&&e.key.toLowerCase()==="n"){ e.preventDefault(); openMini(); }
 });
 
 /* ---------------- tooltip on bubbles ---------------- */

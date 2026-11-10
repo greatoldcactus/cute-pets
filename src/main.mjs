@@ -424,6 +424,15 @@ class Hub {
     return { server: url, sessionId: id };
   }
 
+  async closeSession({ server, sessionId }) {
+    const url = this.pickServer(server);
+    const entry = url && this.clients.get(url);
+    if (!entry || !sessionId) throw new Error("server and sessionId required");
+    await entry.client.deleteSession(sessionId);
+    this.store.removeSession(url, sessionId);
+    return { ok: true };
+  }
+
   async abort({ server, sessionId }) {
     const url = this.pickServer(server);
     const entry = url && this.clients.get(url);

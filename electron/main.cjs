@@ -17,6 +17,14 @@ const MARGIN = 22;
 let win = null;
 let expanded = false;
 let grab = null;
+let locked = null; // last intentional bounds; the window must never change size
+
+// Always size from the WIN constant: getBounds() returns scaled pixels while
+// setBounds() takes DIPs, so feeding one into the other inflates the window on
+// every move (that was the drift that also made the panel miss the screen).
+function place(bounds) {
+  win.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: WIN.width, height: WIN.height }, false);
+}
 
 // ---- config -------------------------------------------------------------
 // ~/.cute-pets/config.json is shared with the brain (brain.json lives there too).
@@ -86,6 +94,19 @@ app.whenReady().then(() => {
     },
   });
 
+  locked = { width: WIN.width, height: WIN.height };
+  win.on("maximize", () => {
+    if (win.isMaximized()) win.unmaximize();
+    const b = win.getBounds();
+    place({ x: b.x, y: b.y });
+  });
+  win.on("resize", () => {
+    const b = win.getBounds();
+    if (b.width !== WIN.width || b.height !== WIN.height) {
+      win.setBounds({ x: b.x, y: b.y, width: WIN.width, height: WIN.height }, false);
+    }
+  });
+
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.loadURL(`${BRAIN}/min.html`);
@@ -146,15 +167,34 @@ app.whenReady().then(() => {
   // moves the window. Keeps click-to-open working (a click is a drag of <4px).
   ipcMain.on("cp:drag-begin", (_e, p) => {
     const b = win.getBounds();
-    grab = { dx: p.x - b.x, dy: p.y - b.y };
+    grab = {
+      dx: p.x - b.x,
+      dy: p.y - b.y,
+      // the sprite box inside the window; only that has to stay on screen
+      pet: p.pet ?? { x: 0, y: 0, width: b.width, height: b.height },
+    };
   });
   ipcMain.on("cp:drag-move", (_e, p) => {
     if (!grab) return;
     const b = win.getBounds();
     const area = screen.getDisplayMatching(b).workArea;
-    const x = Math.min(Math.max(area.x, p.x - grab.dx), area.x + area.width - b.width);
-    const y = Math.min(Math.max(area.y, p.y - grab.dy), area.y + area.height - b.height);
-    win.setBounds({ x: Math.round(x), y: Math.round(y), width: b.width, height: b.height }, false);
+    const pet = grab.pet;
+    // allow the window to hang off-screen; keep the pet itself inside the work area
+    const minX = area.x - pet.x;
+    const maxX = area.x + area.width - (pet.x + pet.width);
+    const minY = area.y - pet.y;
+    const maxY = area.y + area.height - (pet.y + pet.height);
+    const x = Math.min(Math.max(minX, p.x - grab.dx), maxX);
+    const y = Math.min(Math.max(minY, p.y - grab.dy), maxY);
+    place({ x, y });
+  });
+
+  // Nudge the window without touching its size (used to keep the pet still when
+  // the panel flips above/below it).
+  ipcMain.on("cp:move-by", (_e, d) => {
+    if (!d) return;
+    const b = win.getBounds();
+    place({ x: b.x + (d.dx || 0), y: b.y + (d.dy || 0) });
   });
   ipcMain.on("cp:drag-end", () => {
     grab = null;
