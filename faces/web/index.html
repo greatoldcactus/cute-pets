@@ -1,173 +1,270 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>cute-pets</title>
+<title>cute-pets · Saber</title>
 <style>
-:root{--bg:#12131a;--card:#1b1d27;--card2:#232634;--ink:#e8e9f0;--dim:#8b90a6;--run:#58c4ff;--wait:#ffc65c;--err:#ff6b6b;--ok:#6ee7a8;--line:#2c3042}
+:root{--bg:#0f1016;--panel:#16181f;--card:#1b1e27;--card2:#232734;--ink:#e9eaf2;--dim:#8b91a8;
+--run:#5ac8ff;--wait:#ffc65c;--err:#ff6b6b;--ok:#6ee7a8;--line:#282c3a}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 ui-sans-serif,system-ui,"Segoe UI",sans-serif}
-header{display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
-.pet{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:18px;background:var(--card2);border:1px solid var(--line)}
-.pet.waiting{box-shadow:inset 0 0 0 2px var(--wait);animation:p 1.4s infinite}
-.pet.running{box-shadow:inset 0 0 0 2px var(--run);animation:p 1.4s infinite}
-.pet.error{box-shadow:inset 0 0 0 2px var(--err)}
-.pet.idle{box-shadow:inset 0 0 0 2px var(--ok)}
-@keyframes p{50%{opacity:.55}}
-h1{font-size:15px;margin:0;font-weight:600}
-.label{color:var(--dim);font-size:12px}
-main{padding:18px;display:grid;gap:12px;max-width:980px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+html,body{height:100%}
+body{margin:0;background:radial-gradient(1200px 600px at 20% -10%,#1a1f2e 0%,var(--bg) 60%);color:var(--ink);
+font:14px/1.5 ui-sans-serif,system-ui,"Segoe UI",sans-serif;overflow:hidden}
+.app{display:grid;grid-template-columns:280px 1fr;height:100vh}
+/* ---- pet ---- */
+.petpanel{background:linear-gradient(180deg,#171a24,#12141b);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:26px 18px 18px;position:relative}
+.stage{position:relative;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:0}
+.glow{position:absolute;width:230px;height:230px;border-radius:50%;filter:blur(42px);opacity:.32;background:var(--ok);top:50%;left:50%;transform:translate(-50%,-58%);transition:background .5s ease,opacity .5s ease}
+canvas{position:relative;width:250px;height:271px;image-rendering:auto;filter:drop-shadow(0 14px 20px rgba(0,0,0,.55))}
+.badge{position:relative;margin-top:2px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;padding:4px 12px;border-radius:999px;border:1px solid var(--line);color:var(--dim);background:#141720}
+.badge.waiting{color:#201a08;background:var(--wait);border-color:var(--wait);font-weight:700}
+.badge.running{color:#04202b;background:var(--run);border-color:var(--run);font-weight:700}
+.badge.error{color:#2b0808;background:var(--err);border-color:var(--err);font-weight:700}
+.statusline{margin-top:14px;font-size:15px;font-weight:600}
+.counts{margin-top:6px;font-size:12px;color:var(--dim);text-align:center}
+.foot{margin-top:auto;font-size:10.5px;color:#5b6076;letter-spacing:.08em;text-transform:uppercase}
+/* ---- main ---- */
+main{display:flex;flex-direction:column;min-width:0;min-height:0}
+.top{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line)}
+.top h1{font-size:14px;margin:0;font-weight:600;letter-spacing:.02em}
+.pill{font-size:11.5px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+select{background:var(--card2);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font:inherit;font-size:11.5px}
+.scroll{overflow:auto;padding:16px 20px;display:grid;gap:10px;align-content:start}
+.perm{border:1px solid #4a3a1a;background:#241d0f;border-radius:12px;padding:12px 14px}
+.perm b{color:var(--wait)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;cursor:pointer;transition:border-color .15s,transform .15s}
+.card:hover{border-color:#3a4157}
+.card.sel{border-color:#4d5a7d;box-shadow:0 0 0 1px #3a4560 inset}
 .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .title{font-weight:600}
-.chip{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
+.chip{font-size:10.5px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim);letter-spacing:.04em}
 .chip.running{color:var(--run);border-color:#1d3c52;background:#10222d}
 .chip.waiting{color:var(--wait);border-color:#4a3a1a;background:#2a2110}
 .chip.error{color:var(--err);border-color:#4a2020;background:#2a1414}
 .chip.idle{color:var(--ok);border-color:#1d4030;background:#10251c}
-.snippet{color:var(--dim);font-size:12.5px;margin-top:6px;white-space:pre-wrap;max-height:4.5em;overflow:hidden}
 .meta{color:var(--dim);font-size:11.5px}
-input[type=text],textarea{width:100%;background:var(--card2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;resize:vertical}
-textarea{min-height:38px}
+.snippet{color:#a9b0c6;font-size:12.5px;margin-top:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.bar{height:3px;border-radius:2px;background:#262a38;overflow:hidden;margin-top:9px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,#3d7ea6,#5ac8ff);width:0;transition:width .6s ease}
+form.new{display:grid;gap:8px;grid-template-columns:1fr auto;width:100%}
+form.new textarea{grid-column:1/-1}
+input[type=text],textarea{width:100%;background:var(--card2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;resize:none}
+textarea{min-height:40px}
 button{background:var(--card2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 11px;font:inherit;cursor:pointer}
 button:hover{border-color:#3d4460}
 button.primary{background:#24506b;border-color:#2f6d92}
 button.danger{background:#45212a;border-color:#6b2f3a}
 button.ok{background:#1d4030;border-color:#2c6b4c}
-.perm{border:1px solid #4a3a1a;background:#241d0f}
-.perm b{color:var(--wait)}
-.chat{margin-top:10px;display:none;gap:8px;flex-direction:column}
-.chat.on{display:flex}
-.msg{padding:8px 10px;border-radius:8px;background:var(--card2);white-space:pre-wrap;font-size:13px}
-.msg.user{border-left:3px solid #3d4460}
+/* ---- drawer ---- */
+.drawer{position:fixed;top:0;right:0;height:100%;width:440px;background:#14161e;border-left:1px solid var(--line);
+transform:translateX(100%);transition:transform .22s ease;display:flex;flex-direction:column}
+.drawer.on{transform:none}
+.drawer header{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.drawer .msgs{flex:1;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.msg{padding:8px 11px;border-radius:10px;background:var(--card2);white-space:pre-wrap;font-size:13px;max-width:100%}
+.msg.user{border-left:3px solid #3d4460;color:#c8cde0}
 .msg.assistant{border-left:3px solid var(--run)}
-.empty{color:var(--dim);text-align:center;padding:40px 0}
-form.new{display:grid;gap:8px;grid-template-columns:1fr auto}
-form.new .full{grid-column:1/-1}
+.drawer form{border-top:1px solid var(--line);padding:12px 16px;display:flex;gap:8px}
 code{color:#b9c0d8}
+.empty{color:var(--dim);text-align:center;padding:36px 0}
 </style></head>
 <body>
-<header>
-  <div class="pet idle" id="pet">&#128062;</div>
-  <div><h1>cute-pets</h1><div class="label" id="petlabel">connecting&hellip;</div></div>
-  <div style="margin-left:auto" class="meta" id="servers"></div>
-</header>
-<main>
-  <section class="card perm" id="permzone" style="display:none"></section>
-  <section class="card">
-    <div class="row"><span class="title">New request</span></div>
-    <form class="new" id="newform">
-      <input type="text" id="newtitle" placeholder="optional session title">
-      <div></div>
-      <textarea class="full" id="newtext" placeholder="What should OpenCode do? (Ctrl+Enter)"></textarea>
-      <div class="full row"><button class="primary" type="submit">Send</button><span class="meta" id="newstatus"></span></div>
-    </form>
-  </section>
-  <div id="sessions"></div>
-  <div class="empty" id="empty">no sessions yet</div>
-</main>
+<div class="app">
+  <aside class="petpanel">
+    <div class="stage">
+      <div class="glow" id="glow"></div>
+      <canvas id="pet" width="500" height="542"></canvas>
+      <div class="badge" id="badge">idle</div>
+    </div>
+    <div class="statusline" id="statusline">all done</div>
+    <div class="counts" id="counts"></div>
+    <div class="foot">cute-pets · saber</div>
+  </aside>
+
+  <main>
+    <div class="top">
+      <h1>sessions</h1>
+      <span class="pill" id="servers">0 servers</span>
+      <span class="pill" id="totals"></span>
+      <select id="filter" title="filter by project"><option value="all">all projects</option></select>
+      <div style="flex:1"></div>
+      <span class="meta" id="updated"></span>
+    </div>
+    <div class="scroll">
+      <section class="card" id="permzone" style="display:none;cursor:default"></section>
+      <section class="card" style="cursor:default">
+        <form class="new" id="newform">
+          <input type="text" id="newtitle" placeholder="new session title (optional)">
+          <button class="primary" type="submit">Send</button>
+          <textarea id="newtext" placeholder="Ask OpenCode to do something... (Ctrl+Enter)"></textarea>
+        </form>
+      </section>
+      <div id="sessions"></div>
+      <div class="empty" id="empty">no sessions yet</div>
+    </div>
+  </main>
+</div>
+
+<aside class="drawer" id="drawer">
+  <header>
+    <div style="flex:1;min-width:0">
+      <div class="title" id="drawerTitle" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+      <div class="meta" id="drawerMeta"></div>
+    </div>
+    <button id="closeDrawer">Close</button>
+  </header>
+  <div class="msgs" id="msgs"></div>
+  <form id="replyForm">
+    <input type="text" id="replyText" placeholder="Reply in this conversation...">
+    <button class="primary" type="submit">Send</button>
+  </form>
+</aside>
+
 <script>
 const $=s=>document.querySelector(s);
-let state={pet:{state:"idle",label:""},sessions:[],permissions:[],servers:[]};
-const expanded=new Set();
 const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const chip=(t,c="")=>`<span class="chip ${c}">${esc(t)}</span>`;
 const short=n=>n>=1000?(n/1000).toFixed(1)+"k":String(n||0);
+let state={pet:{state:"idle",label:""},sessions:[],permissions:[],servers:[]};
+let open=null, lastMsgKey="";
 
+/* ---------- Saber sprite ---------- */
+const FW=192,FH=208,FRAMES=8;
+const ROW={idle:0,running:2,waiting:6,error:9};
+const FPS={idle:6,running:11,waiting:5,error:4};
+const COLOR={idle:"#6ee7a8",running:"#5ac8ff",waiting:"#ffc65c",error:"#ff6b6b"};
+const img=new Image(); img.src="/assets/saber/spritesheet.webp";
+const cv=$("#pet"), ctx=cv.getContext("2d");
+let petState="idle";
+function frame(t){ const s=FPS[petState]||6; return Math.floor(t/1000*s)%FRAMES; }
+function loop(t){
+  if(img.complete&&img.naturalWidth){
+    ctx.clearRect(0,0,cv.width,cv.height);
+    const f=frame(t), r=ROW[petState]??0;
+    ctx.drawImage(img, f*FW, r*FH, FW, FH, 0, 0, cv.width, cv.height);
+  }
+  requestAnimationFrame(loop);
+}
+img.onload=()=>requestAnimationFrame(loop);
+requestAnimationFrame(loop);
+
+/* ---------- render ---------- */
 function render(){
   const pet=state.pet||{state:"idle",label:""};
-  $("#pet").className="pet "+pet.state;
-  $("#petlabel").textContent=pet.label;
-  $("#servers").textContent=(state.servers||[]).map(s=>(s.online?"\u25cf ":"\u25cb ")+s.url).join("   ");
-  const perms=state.permissions||[], pz=$("#permzone");
-  if(perms.length){
-    pz.style.display="";
-    pz.innerHTML=perms.map(p=>`<div class="row" style="margin-bottom:8px">
-      <div style="flex:1"><b>Approve</b> <code>${esc(p.permission)}</code>
-      ${p.patterns&&p.patterns.length?" \u00b7 "+esc(p.patterns.join(", ")):""}
-      <div class="meta">session ${esc((p.sessionID||"").slice(0,18))}&hellip;</div></div>
-      <button class="ok" data-act="once" data-id="${esc(p.id)}">Once</button>
-      <button class="ok" data-act="always" data-id="${esc(p.id)}">Always</button>
-      <button class="danger" data-act="reject" data-id="${esc(p.id)}">Reject</button></div>`).join("");
-  } else { pz.style.display="none"; pz.innerHTML=""; }
+  petState=pet.state||"idle";
+  $("#glow").style.background=COLOR[petState]||COLOR.idle;
+  const badge=$("#badge"); badge.className="badge "+petState; badge.textContent=petState;
+  $("#statusline").textContent=pet.label||"";
+  const c=pet.counts||{};
+  $("#counts").textContent=[c.waiting?`${c.waiting} waiting`:"",c.running?`${c.running} running`:"",c.error?`${c.error} error`:"",`${c.idle||0} idle`].filter(Boolean).join(" · ");
+  $("#servers").textContent=`${(state.servers||[]).filter(s=>s.online).length} servers`;
+  const allSessions=state.sessions||[];
+  const tot=allSessions.reduce((n,s)=>n+((s.tokens?.input||0)+(s.tokens?.output||0)),0);
+  $("#totals").textContent=`${allSessions.length} sessions · ${short(tot)} tok`;
+  $("#updated").textContent=new Date().toLocaleTimeString();
 
-  const list=state.sessions||[];
+  /* approvals */
+  const perms=state.permissions||[], pz=$("#permzone");
+  if(perms.length){ pz.style.display=""; pz.className="perm"; pz.innerHTML=perms.map(p=>`
+    <div class="row"><div style="flex:1"><b>Approval needed</b> · <code>${esc(p.permission)}</code>
+      ${(p.patterns||[]).length?`<div class="meta">${esc((p.patterns||[]).join(", "))}</div>`:""}</div>
+      <button class="ok" data-act="once" data-id="${esc(p.id)}">Allow once</button>
+      <button class="ok" data-act="always" data-id="${esc(p.id)}">Always</button>
+      <button class="danger" data-act="reject" data-id="${esc(p.id)}">Reject</button></div>`).join(""); }
+  else { pz.style.display="none"; pz.innerHTML=""; pz.className="card"; }
+
+  /* sessions (filtered by project) */
+  const all=state.sessions||[];
+  const dirs=[...new Set(all.map(s=>s.dirName).filter(Boolean))].sort();
+  const sel=$("#filter");
+  if(sel.dataset.built!==dirs.join("|")){
+    const cur=sel.value;
+    sel.innerHTML=`<option value="all">all projects</option>`+dirs.map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join("");
+    if(dirs.includes(cur)) sel.value=cur; else if(cur!=="all"&&cur!=="") sel.value="all";
+    sel.dataset.built=dirs.join("|");
+  }
+  const f=sel.value||"all";
+  const list=f==="all"?all:all.filter(s=>s.dirName===f);
   $("#empty").style.display=list.length?"none":"";
   $("#sessions").innerHTML=list.map(s=>{
-    const tok=(s.tokens&&(s.tokens.input+s.tokens.output))||0;
-    return `<section class="card" style="margin-bottom:12px">
-      <div class="row">${chip(s.state,s.state)}<span class="title">${esc(s.title)}</span>
-      <span class="meta">${esc(s.dirName||"")}${s.agent?" \u00b7 "+esc(s.agent):""}</span>
-      <span class="meta" style="margin-left:auto">${short(tok)} tok${s.cost?" \u00b7 $"+s.cost.toFixed(3):""}</span></div>
+    const tok=(s.tokens?.input||0)+(s.tokens?.output||0);
+    const busy=s.state==="running";
+    return `<section class="card ${open&&open.id===s.id?"sel":""}" data-open="${esc(s.id)}" data-server="${esc(s.server)}">
+      <div class="row">
+        <span class="chip ${s.state}">${s.state}</span>
+        <span class="title">${esc(s.title)}</span>
+        <span class="meta">${esc(s.dirName||"")}${s.agent?" · "+esc(s.agent):""}</span>
+        <span class="meta" style="margin-left:auto">${short(tok)} tok${s.cost?" · $"+s.cost.toFixed(3):""}</span>
+      </div>
       ${s.detail?`<div class="meta" style="color:var(--err)">${esc(s.detail)}</div>`:""}
       ${s.lastText?`<div class="snippet">${esc(s.lastText)}</div>`:""}
-      <div class="row" style="margin-top:8px">
-        <button data-act="toggle" data-server="${esc(s.server)}" data-sid="${esc(s.id)}">${expanded.has(s.id)?"Hide":"Open"}</button>
-        ${s.state==="running"?`<button class="danger" data-act="abort" data-server="${esc(s.server)}" data-sid="${esc(s.id)}">Stop</button>`:""}
-      </div>
-      <div class="chat ${expanded.has(s.id)?"on":""}" id="chat-${esc(s.id)}"></div>
-      <form class="row" style="margin-top:8px;gap:8px" data-act="reply" data-server="${esc(s.server)}" data-sid="${esc(s.id)}">
-        <input type="text" name="text" placeholder="Reply in this session&hellip;" style="flex:1">
-        <button type="submit">Send</button>
-      </form></section>`;
+      ${busy?`<div class="bar"><i style="width:${Math.min(95,30+((Date.now()/90)%60))}%"></i></div>`:""}
+    </section>`;
   }).join("");
-  if(expanded.size) for(const id of expanded) loadChatById(id,false);
 }
 
-async function loadChat(server,id){
-  const el=document.getElementById("chat-"+id); if(!el) return;
-  try{
-    const r=await fetch(`/api/messages?server=${encodeURIComponent(server)}&sessionId=${encodeURIComponent(id)}&limit=12`);
-    const msgs=await r.json();
-    el.innerHTML=(msgs||[]).map(m=>{
-      const t=(m.parts||[]).map(p=>p.text).join("\n");
-      return `<div class="msg ${esc(m.role)}">${esc(t)}</div>`;
-    }).join("")||`<div class="meta">no messages</div>`;
-  }catch(e){ el.innerHTML=`<div class="meta">${esc(e)}</div>`; }
-}
-function loadChatById(id,force){
-  const s=(state.sessions||[]).find(x=>x.id===id); if(!s) return;
-  const el=document.getElementById("chat-"+id); if(!el) return;
-  if(!force && el.dataset.loaded==="1") return;
-  el.dataset.loaded="1"; loadChat(s.server,id);
-}
+/* ---------- actions ---------- */
 async function post(path,body){
   const r=await fetch(path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
-  const j=await r.json();
-  if(!r.ok) throw new Error(j.error||r.status);
-  return j;
+  const j=await r.json(); if(!r.ok) throw new Error(j.error||r.status); return j;
 }
 document.addEventListener("click",async ev=>{
-  const b=ev.target.closest("button[data-act]"); if(!b) return;
-  const act=b.dataset.act;
-  try{
-    if(act==="once"||act==="always"||act==="reject") await post("/api/permission",{id:b.dataset.id,reply:act});
-    else if(act==="abort") await post("/api/abort",{server:b.dataset.server,sessionId:b.dataset.sid});
-    else if(act==="toggle"){
-      const id=b.dataset.sid;
-      if(expanded.has(id)) expanded.delete(id); else expanded.add(id);
-      render(); if(expanded.has(id)) loadChatById(id,true);
-    }
-  }catch(e){ alert(String(e)); }
+  const b=ev.target.closest("button[data-act]");
+  if(b){ try{ await post("/api/permission",{id:b.dataset.id,reply:b.dataset.act}); }catch(e){ alert(e); } return; }
+  const c=ev.target.closest("[data-open]");
+  if(c){ openConversation(c.dataset.server,c.dataset.open); }
 });
-document.addEventListener("submit",async ev=>{
-  const f=ev.target.closest("form[data-act]"); if(!f) return;
+
+async function openConversation(server,id){
+  const s=(state.sessions||[]).find(x=>x.id===id); if(!s) return;
+  open={server,id};
+  $("#drawer").classList.add("on");
+  $("#drawerTitle").textContent=s.title;
+  $("#drawerMeta").textContent=`${s.dirName||""} · ${s.state}${s.agent?" · "+s.agent:""}`;
+  render();
+  await loadMessages();
+}
+$("#closeDrawer").onclick=()=>{ $("#drawer").classList.remove("on"); open=null; render(); };
+
+async function loadMessages(){
+  if(!open) return;
+  const el=$("#msgs");
+  try{
+    const r=await fetch(`/api/messages?server=${encodeURIComponent(open.server)}&sessionId=${encodeURIComponent(open.id)}&limit=30`);
+    const msgs=await r.json();
+    const key=JSON.stringify((msgs||[]).map(m=>(m.parts||[]).map(p=>p.text).join("")));
+    if(key===lastMsgKey) return;
+    lastMsgKey=key;
+    el.innerHTML=(msgs||[]).map(m=>({m, t:(m.parts||[]).map(p=>p.text).join("\n").trim()}))
+      .filter(x=>x.t)
+      .map(({m,t})=>`<div class="msg ${m.role==="user"?"user":"assistant"}">${esc(t)}</div>`)
+      .join("")||`<div class="meta">no text messages yet</div>`;
+    el.scrollTop=el.scrollHeight;
+  }catch(e){ el.innerHTML=`<div class="meta">${esc(e)}</div>`; }
+}
+
+$("#replyForm").addEventListener("submit",async ev=>{
   ev.preventDefault();
-  const input=f.querySelector("input[name=text]"); const text=(input.value||"").trim(); if(!text) return;
-  input.value="";
-  try{ await post("/api/prompt",{server:f.dataset.server,sessionId:f.dataset.sid,text}); }catch(e){ alert(String(e)); }
+  const t=$("#replyText").value.trim(); if(!t||!open) return;
+  $("#replyText").value="";
+  try{ await post("/api/prompt",{server:open.server,sessionId:open.id,text:t}); setTimeout(loadMessages,600); }catch(e){ alert(e); }
 });
 $("#newform").addEventListener("submit",async ev=>{
   ev.preventDefault();
-  const title=$("#newtitle").value.trim(), text=$("#newtext").value.trim(); if(!text) return;
-  $("#newstatus").textContent="sending\u2026";
-  try{ await post("/api/prompt",{newSession:true,title:title||null,text}); $("#newtext").value=""; $("#newtitle").value=""; $("#newstatus").textContent="sent"; }
-  catch(e){ $("#newstatus").textContent=String(e); }
+  const text=$("#newtext").value.trim(); if(!text) return;
+  const title=$("#newtitle").value.trim();
+  try{ await post("/api/prompt",{newSession:true,title:title||null,text}); $("#newtext").value=""; $("#newtitle").value=""; }catch(e){ alert(e); }
 });
 $("#newtext").addEventListener("keydown",e=>{ if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)) $("#newform").requestSubmit(); });
+
 function connect(){
   const es=new EventSource("/api/events");
-  es.addEventListener("state",ev=>{ state=JSON.parse(ev.data); render(); });
+  es.addEventListener("state",ev=>{
+    state=JSON.parse(ev.data);
+    render();
+    if(open){ const s=(state.sessions||[]).find(x=>x.id===open.id);
+      if(s){ $("#drawerMeta").textContent=`${s.dirName||""} · ${s.state}`; loadMessages(); } }
+  });
   es.onerror=()=>{ es.close(); setTimeout(connect,1500); };
 }
+$("#filter").addEventListener("change",()=>{ lastMsgKey=""; render(); });
 connect(); render();
 </script>
 </body></html>
