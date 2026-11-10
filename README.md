@@ -19,26 +19,52 @@ cute-pets/
 
 ## Run it
 
-```bash
-# 1. start an opencode server you can attach to (any port)
-opencode serve --port 4096
-
-# 2. start the brain; it finds opencode servers by scanning their listening ports
-node src/main.mjs
-# or attach explicitly:
-node src/main.mjs --server http://127.0.0.1:4123
-
-# 3. open the face
-#    http://127.0.0.1:4280
-```
-
-Zero-config alternative: copy `plugin/cute-pets.ts` into `~/.config/opencode/plugins/`
-(auto-discovered) and start the brain whenever you like — the plugin re-announces its
-server URL every 30s, so ordering never matters.
+Requirements: Node ≥ 22 and the `opencode` CLI on PATH.
 
 ```bash
-node scripts/smoke.mjs    # end-to-end check against a live server
+cd C:/projects/cute-pets
+npm install                                  # first time
+node node_modules/electron/install.js        # only if the Electron binary is missing
+
+npm run brain     # terminal 1: brain on http://127.0.0.1:4280
+npm run shell     # terminal 2: the floating pet
 ```
+
+The shell finds opencode servers by itself (it scans listening ports of `opencode`
+processes), so you do not have to point it at anything. Start `opencode` / the TUI
+whenever you like — new servers are picked up within ~10 s.
+
+Useful extras:
+
+```bash
+npm run pets -- list                              # installed pets, * = active
+npm run pets -- import brawl-worker               # a Codex pet id
+npm run pets -- import C:/path/pack.zip           # a .zip pack or a folder
+npm run pets -- use saber                         # switch
+
+npm run shell -- --facing left                    # override facing for one run
+npm run smoke                                     # end-to-end check against the brain
+```
+
+Browser face instead of the floating window: open **http://127.0.0.1:4280** (full
+session tray, approvals, chat) — or `/min.html` for the pet-only view.
+
+Config lives in `~/.cute-pets/config.json` (`facing`, `activePet`); pets are stored in
+`~/.cute-pets/pets/<id>/`; a running brain writes `~/.cute-pets/brain.json`.
+
+### Optional: zero-config attachment
+
+Copy `plugin/cute-pets.ts` into `~/.config/opencode/plugins/` (auto-discovered). The
+plugin announces the server URL to the brain every 30 s, so ordering never matters.
+Without it, discovery still works by port scan.
+
+### Troubleshooting
+
+- `EADDRINUSE` on 4280 — an older brain is still running: find the PID with
+  `netstat -ano | findstr :4280` and `taskkill /F /PID <pid>`.
+- `Electron failed to install correctly` — run `node node_modules/electron/install.js`.
+- Pet shows but nothing reacts — check `curl http://127.0.0.1:4280/api/state`; if
+  `servers` is empty, no opencode server is running.
 
 ## What it does today
 

@@ -1,13 +1,13 @@
 // cute-pets desktop shell: a transparent, frameless, always-on-top pet window.
 // Usage: npx electron electron/main.cjs [--dev]
-// Env:   CP_URL  brain URL (default http://127.0.0.1:4282)
+// Env:   CP_URL  brain URL (default http://127.0.0.1:4280)
 const { app, BrowserWindow, ipcMain, screen, dialog } = require("electron");
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 
-const BRAIN = process.env.CP_URL || "http://127.0.0.1:4282";
+const BRAIN = process.env.CP_URL || "http://127.0.0.1:4280";
 const MIN = { width: 272, height: 404 };
 const EXP = { width: 496, height: 760 };
 const MARGIN = 22;
