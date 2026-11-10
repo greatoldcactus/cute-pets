@@ -249,6 +249,85 @@ class Hub {
     return [...byDir.values()].sort((a, b) => b.sessions - a.sessions);
   }
 
+  async models({ server }) {
+    const url = this.pickServer(server);
+    const entry = url && this.clients.get(url);
+    if (!entry) return { models: [], default: {} };
+    const cfg = await entry.client.models();
+    const out = [];
+    for (const provider of cfg?.providers ?? []) {
+      for (const modelID of Object.keys(provider.models ?? {})) {
+        const info = provider.models[modelID] ?? {};
+        out.push({
+          providerID: provider.id,
+          id: modelID,
+          name: info.name ?? modelID,
+          free: /free/i.test(modelID),
+          default: cfg?.default?.[provider.id] === modelID,
+        });
+      }
+    }
+    out.sort((a, b) => Number(b.default) - Number(a.default) || a.providerID.localeCompare(b.providerID) || a.id.localeCompare(b.id));
+    return { models: out, default: cfg?.default ?? {} };
+  }
+
+  async agents({ server }) {
+    const url = this.pickServer(server);
+    const entry = url && this.clients.get(url);
+    if (!entry) return [];
+    const agents = await entry.client.agents();
+    return (agents ?? []).map((a) => ({ name: a.name, mode: a.mode, description: a.description ?? "" }));
+  }
+
+  async sessionAction({ server, sessionId, action, value }) {
+    const url = this.pickServer(server);
+    const entry = url && this.clients.get(url);
+    if (!entry || !sessionId) throw new Error("server and sessionId required");
+    const client = entry.client;
+    const rec = this.store.sessions.get(`${url}::${sessionId}`);
+    const refresh = async () => {
+      try { this.store.upsertSession(url, await client.get(`/session/${sessionId}`)); } catch {}
+    };
+
+    switch (action) {
+      case "model":
+        if (!value?.id || !value?.providerID) throw new Error("model id and providerID required");
+        await client.setModel(sessionId, { id: value.id, providerID: value.providerID, variant: value.variant ?? "default" });
+        await refresh();
+        return { ok: true, model: value };
+      case "agent":
+        if (!value) throw new Error("agent required");
+        await client.setAgent(sessionId, value);
+        await refresh();
+        return { ok: true, agent: value };
+      case "compact": {
+        const model = rec?.model;
+        if (!model?.id || !model?.providerID) throw new Error("session has no model to summarize with");
+        await client.summarize(sessionId, model.providerID, model.id);
+        return { ok: true };
+      }
+      case "share": {
+        const out = await client.share(sessionId);
+        return { ok: true, url: out?.share?.url ?? null };
+      }
+      case "unshare":
+        await client.unshare(sessionId);
+        return { ok: true };
+      case "undo": {
+        const msgs = await client.messages(sessionId, 50);
+        const lastUser = [...(msgs ?? [])].reverse().find((m) => m.info?.role === "user");
+        if (!lastUser) throw new Error("nothing to undo");
+        await client.revert(sessionId, lastUser.info.id);
+        return { ok: true, reverted: lastUser.info.id };
+      }
+      case "redo":
+        await client.unrevert(sessionId);
+        return { ok: true };
+      default:
+        throw new Error(`unknown action: ${action}`);
+    }
+  }
+
   async commands({ server }) {
     const url = this.pickServer(server);
     const entry = url && this.clients.get(url);

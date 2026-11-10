@@ -81,8 +81,13 @@ Without it, discovery still works by port scan.
 - **Right-click the pet** for quick actions: New chat…, Sessions, Pets, Settings, Hide, Quit.
 - **New chat** picks a working directory — a suggestion from your recent sessions or any folder
   via the system picker. A folder without a running server gets its own `opencode serve`.
-- **`/` in the composer** lists OpenCode commands with their descriptions; arrow keys or Tab to
-  pick, Enter to run. Commands go through `POST /session/{id}/command`.
+- **`/` in the composer** lists two kinds of commands, arrow keys or Tab to pick, Enter to run:
+  - **agent commands** from `GET /command` (`init`, `review`, `customize-opencode`) — sent through
+    `POST /session/{id}/command`, which runs synchronously server-side.
+  - **pet commands** (`new`, `sessions`, `model`, `agent`, `compact`, `undo`, `redo`, `share`,
+    `abort`, `pets`, `settings`, `help`). The TUI-only slash commands never appear in
+    `GET /command`, so the pet re-implements them on the server API — `/model` and `/agent`
+    open a picker, `/undo` reverts the last user message, `/share` copies a link.
 - **Hover a bubble** to see the session, its state and the tail of its last message.
 - The window is a **fixed size** — expanding the panel never resizes it, so nothing flickers.
 

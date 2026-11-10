@@ -74,6 +74,25 @@ export function startServer({ port, host, store, api }) {
         return json(res, 200, { commands });
       }
 
+      if (route === "GET /api/models") {
+        return json(res, 200, await api.models({ server: url.searchParams.get("server") }));
+      }
+
+      if (route === "GET /api/agents") {
+        return json(res, 200, { agents: await api.agents({ server: url.searchParams.get("server") }) });
+      }
+
+      if (route === "POST /api/session/action") {
+        const body = await readBody(req);
+        const out = await api.sessionAction({
+          server: body.server ?? null,
+          sessionId: body.sessionId ?? null,
+          action: body.action,
+          value: body.value ?? null,
+        });
+        return json(res, 200, out);
+      }
+
       if (route === "GET /api/workspaces") return json(res, 200, { workspaces: api.workspaces() });
 
       if (route === "POST /api/workspace") {
