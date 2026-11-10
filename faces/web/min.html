@@ -226,6 +226,43 @@ async function post(path, body){
 const PANEL_H=574;
 let lastLayout=0;   // setExpanded moves the window; a click that lands right after is noise
 function petRect(){ return cv.getBoundingClientRect(); }
+
+// Keep the pet AND whatever panel is open inside the work area. Moves the window by
+// the smallest amount that fixes it; the sprite is never pushed off-screen.
+// The window may still be moving from the flip compensation when the panel is first
+// laid out, so measure a few times instead of once.
+function scheduleFit(){
+  requestAnimationFrame(fitOnScreen);
+  setTimeout(fitOnScreen,120);
+  setTimeout(fitOnScreen,320);
+}
+function visibleBoxes(){
+  const boxes=[petRect()];
+  const open=document.body.classList.contains("mini-open")?$("#mini"):$(".panel");
+  if(open && getComputedStyle(open).display!=="none"){
+    const r=open.getBoundingClientRect();
+    if(r.width&&r.height) boxes.push(r);
+  }
+  return boxes;
+}
+function fitOnScreen(){
+  const al=screen.availLeft??0, at=screen.availTop??0;
+  const aw=screen.availWidth||screen.width, ah=screen.availHeight||screen.height;
+  const boxes=visibleBoxes();
+  const L=Math.min(...boxes.map(b=>window.screenX+b.left));
+  const R=Math.max(...boxes.map(b=>window.screenX+b.right));
+  const T=Math.min(...boxes.map(b=>window.screenY+b.top));
+  const B=Math.max(...boxes.map(b=>window.screenY+b.bottom));
+  let dx=0, dy=0;
+  if(L<al) dx=al-L; else if(R>al+aw) dx=(al+aw)-R;
+  if(T<at) dy=at-T; else if(B>at+ah) dy=(at+ah)-B;
+  // the sprite wins over the panel: never trade visibility of the pet for the panel
+  const p=petRect();
+  const pT=window.screenY+p.top+dy, pB=window.screenY+p.bottom+dy;
+  if(pT<at) dy+=(at-pT);
+  if(pB>at+ah) dy-=((pB)-(at+ah));
+  if(Math.abs(dx)>=1||Math.abs(dy)>=1) api.moveBy(Math.round(dx), Math.round(dy));
+}
 function setExpanded(on){
   if(on===expanded) return;
   lastLayout=Date.now();
@@ -236,11 +273,17 @@ function setExpanded(on){
   // If there is no room above the pet for the panel, render it below instead and
   // move the window down by the same amount so the pet does not appear to jump.
   const petTopScreen=window.screenY+before;
-  const flip=on && petTopScreen < PANEL_H+12;
+  const petBottomScreen=petTopScreen+petRect().height;
+  const at=screen.availTop??0, ah=screen.availHeight||screen.height;
+  const roomAbove=petTopScreen-at;
+  const roomBelow=(at+ah)-petBottomScreen;
+  // above by default; go below when there is no room above but there is below
+  const flip=on && (roomAbove < PANEL_H+12) && (roomBelow > roomAbove);
   document.body.classList.toggle("flip",flip);
   const after=petRect().top;
   if(api.moveBy && before!==after) api.moveBy(0, Math.round(before-after));
   api.setExpanded(on);
+  if(on) scheduleFit();
   if(!on) document.body.classList.remove("mini-open");
 }
 function showView(v){ view=v; render(); }
@@ -407,7 +450,7 @@ function openMini(){
   document.body.classList.add("mini-open");
   $("#miniDir").textContent=newDir||"no folder";
   $("#miniDir").textContent=newDir||"no folder";
-  setTimeout(()=>$("#miniText").focus(),60);
+  setTimeout(()=>{ scheduleFit(); $("#miniText").focus(); },60);
 }
 async function startMini(){
   const text=$("#miniText").value.trim(); if(!text) return;

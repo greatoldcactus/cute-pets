@@ -1,0 +1,50 @@
+{
+  "tool": "built-in image_gen",
+  "poses": [
+    {
+      "name": "master",
+      "path": "poses/master.png",
+      "prompt": "Use case: stylized-concept. Generate ONE original full-body desktop game pet sprite: Chibi Knight, a cute but competent girl 2.5 heads tall, big head small body. Crimson/maroon plate armor over steel-grey underlayer, simple brass trim, small round shield with red field in her left hand (image right), short steel sword in her right hand (image left). Dark brown short bob hair. Visible face, large brown eyes with clear eyelashes, tiny mouth, blush. Rounded steel helm with raised visor and cheek guards and curved red feather plume; no horns, no antennae. Small maroon cape. Front three-quarter view facing slightly right, relaxed standing idle, feet level. Clean modern chibi game pixel-art-adjacent sprite, sharp consistent dark outline, flat 2-3 tone cel shading per material, no gradients, texture or noise, no soft lighting. Original generic character, no blonde, no blue dress, no golden sword, no franchise likeness. Whole character centered, all plume/sword/feet inside frame with generous transparent margins. Character silhouette about 140 wide by 190 tall in proportion; designed to downscale to a 192x208 cell with about 1px dark outlines. ONE character only, no lettering, no ground, no cast shadow, no plate, fully transparent background. This is the master IDLE pose for a consistent animation pack."
+    },
+    {
+      "name": "blink",
+      "path": "poses/blink.png",
+      "prompt": "Use case: identity-preserve. Reference is the master Chibi Knight design. Create ONE full body animation keypose of exactly this same girl. Standing idle exactly as reference, but both eyes closed in a relaxed blink. Keep body, boots, sword and shield positions identical. Plume tip sways slightly right. Preserve identical face, brown bob, armor design and palette, raised visor helmet, red plume, maroon cape, same short sword in right hand and red round shield in left. Same proportions and scale, clean dark outline and flat 2-3 tone cel shading; simplify away gradients. Entire character with generous transparent margin, no crop, no ground shadow, no text, fully transparent background. Single character only."
+    },
+    {
+      "name": "run_a",
+      "path": "poses/run_a.png",
+      "prompt": "Use case: identity-preserve. Reference is master Chibi Knight. ONE full body animation pose of exactly same girl. Running toward image right in three-quarter view, forward lean. Sword-side leg forward and shield-side leg back. Sword arm swings BACK toward image left with short blade down-left, shield arm swings forward to right. Clearly separated legs in extended contact stride, cape and plume trail left. Keep identical brown bob, face, raised visor and cheek guards, crimson armor with brass trim, small round red shield and short steel sword, proportions, palette, clean thin dark outlines and flat 2-3 tone cel shading. No gradients or texture. Entire character centered with margins. Real transparent alpha background: NO checkerboard pattern, NO white background, NO shadow or glow, no text. Same front three-quarter view, not profile."
+    },
+    {
+      "name": "run_b",
+      "path": "poses/run_b.png",
+      "prompt": "Use case: identity-preserve. Reference is the master Chibi Knight design. Create ONE full body animation keypose of exactly this same girl. RUN CYCLE keypose B passing: running toward image right in front three-quarter view. Torso leans forward 12 degrees. Her right leg is under torso supporting weight, left knee bends and lifts forward with boot off ground. Sword arm and shield arm passing close to torso. Cape and plume trail left. Keep face visible, legs clearly separated, no speed lines. Preserve identical face, brown bob, armor design and palette, raised visor helmet, red plume, maroon cape, same short sword in right hand and red round shield in left. Same proportions and scale, clean dark outline and flat 2-3 tone cel shading; simplify away gradients. Entire character with generous transparent margin, no crop, no ground shadow, no text, fully transparent background. Single character only."
+    },
+    {
+      "name": "run_c",
+      "path": "poses/run_c.png",
+      "prompt": "Use case: identity-preserve. Reference is master Chibi Knight. ONE full body animation pose of exactly same girl. RUN keypose opposite contact: running right, torso leaning forward. Sword-side right leg reaches BACK to image left, shield-side left leg reaches FORWARD to image right and down to ground. Sword arm swings forward short blade pointing diagonally up-right, shield arm swings back. Clearly alternating leg position from the usual right-leg-forward stance. Keep identical brown bob, face, raised visor and cheek guards, crimson armor with brass trim, small round red shield and short steel sword, proportions, palette, clean thin dark outlines and flat 2-3 tone cel shading. No gradients or texture. Entire character centered with margins. Real transparent alpha background: NO checkerboard pattern, NO white background, NO shadow or glow, no text. Same front three-quarter view, not profile."
+    },
+    {
+      "name": "run_d",
+      "path": "poses/run_d.png",
+      "prompt": "Use case: identity-preserve. Reference is master Chibi Knight. ONE full body animation pose of exactly same girl. RUN opposite passing: running toward right, forward lean. Shield-side LEFT leg is straight beneath body supporting weight. Sword-side RIGHT knee is bent raised FORWARD, right boot lifted off ground. Sword held forward, shield pulled back. Face visible. Cape and plume trail left. Keep identical brown bob, face, raised visor and cheek guards, crimson armor with brass trim, small round red shield and short steel sword, proportions, palette, clean thin dark outlines and flat 2-3 tone cel shading. No gradients or texture. Entire character centered with margins. Real transparent alpha background: NO checkerboard pattern, NO white background, NO shadow or glow, no text. Same front three-quarter view, not profile."
+    },
+    {
+      "name": "wait_left",
+      "path": "poses/wait_left.png",
+      "prompt": "Use case: identity-preserve. Reference is master Chibi Knight. ONE full body animation pose of exactly same girl. Alert waiting stance, both boots planted. Turn head and pupils to image left, inquisitive vigilant expression. Hold short sword down at side and shield close. Shoulders square. Plume droops a little left. Keep identical brown bob, face, raised visor and cheek guards, crimson armor with brass trim, small round red shield and short steel sword, proportions, palette, clean thin dark outlines and flat 2-3 tone cel shading. No gradients or texture. Entire character centered with margins. Real transparent alpha background: NO checkerboard pattern, NO white background, NO shadow or glow, no text. Same front three-quarter view, not profile."
+    },
+    {
+      "name": "wait_right",
+      "path": "poses/wait_right.png",
+      "prompt": "Use case: identity-preserve. Reference is master Chibi Knight. ONE full body animation pose of exactly same girl. Alert waiting stance, sword down at side, shield close. Eyes glance toward image RIGHT. Tap shield-side boot: lift front toe slightly, heel planted. Same body facing as reference, plume tip flicks to right. Keep identical brown bob, face, raised visor and cheek guards, crimson armor with brass trim, small round red shield and short steel sword, proportions, palette, clean thin dark outlines and flat 2-3 tone cel shading. No gradients or texture. Entire character centered with margins. Real transparent alpha background: NO checkerboard pattern, NO white background, NO shadow or glow, no text. Same front three-quarter view, not profile."
+    },
+    {
+      "name": "error",
+      "path": "poses/error.png",
+      "prompt": "Use case: identity-preserve. Reference is master Chibi Knight. ONE full body animation pose of exactly same girl. Error discouraged stance. Slumped shoulders, helmet and head tilted DOWN, worried downward eyes and tiny wavy mouth, arms droop, sword lowered, shield hangs low. One small pale blue sweat drop at temple. NO exclamation mark (will be composited separately). Feet planted and same size as reference. Keep identical brown bob, face, raised visor and cheek guards, crimson armor with brass trim, small round red shield and short steel sword, proportions, palette, clean thin dark outlines and flat 2-3 tone cel shading. No gradients or texture. Entire character centered with margins. Real transparent alpha background: NO checkerboard pattern, NO white background, NO shadow or glow, no text. Same front three-quarter view, not profile."
+    }
+  ]
+}

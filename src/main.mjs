@@ -11,6 +11,7 @@ import { OpenCodeClient } from "./opencode.mjs";
 import { OpenCodeV2Client } from "./opencode-v2.mjs";
 import { findOpencodePorts } from "./discover.mjs";
 import { startServer } from "./server.mjs";
+import { ensureBuiltin } from "./pets.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -531,6 +532,13 @@ if (args.help) {
 
 const store = new PetState();
 const hub = new Hub(store);
+// Ship a usable pet: install the bundled pack on first run and make it active.
+try {
+  const builtin = ensureBuiltin();
+  if (builtin) log(`built-in pet ready: ${builtin}`);
+} catch (e) {
+  log("built-in pet unavailable:", e.message);
+}
 const { port } = await startServer({ port: args.port, host: args.host, store, api: hub });
 writeDiscovery(port, args.host);
 log(`face API on http://${args.host}:${port}`);
