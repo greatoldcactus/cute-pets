@@ -3,6 +3,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { listPets, importPet, usePet, activePet, petAsset } from "./pets.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = path.join(HERE, "..", "faces", "web");
@@ -52,6 +53,42 @@ export function startServer({ port, host, store, api }) {
       if (route === "GET /api/health") return json(res, 200, { ok: true, uptime: process.uptime() });
 
       if (route === "GET /api/state") return json(res, 200, store.snapshot());
+
+      if (route === "GET /api/pet") {
+        const pet = activePet();
+        if (!pet) {
+          return json(res, 200, { id: "saber", name: "Saber", fallback: true, url: "/assets/saber/spritesheet.webp" });
+        }
+        return json(res, 200, {
+          id: pet.id,
+          name: pet.name,
+          description: pet.description,
+          url: `/pets/${pet.id}/${pet.spritesheetPath}`,
+        });
+      }
+
+      if (route === "GET /api/pets") return json(res, 200, listPets());
+
+      if (route === "POST /api/pets/import") {
+        const body = await readBody(req);
+        const pet = importPet(body.path);
+        return json(res, 200, { ok: true, ...pet, ...listPets() });
+      }
+
+      if (route === "POST /api/pets/active") {
+        const body = await readBody(req);
+        if (!body.id) return json(res, 400, { error: "id required" });
+        return json(res, 200, { ok: true, active: usePet(body.id) });
+      }
+
+      if (req.method === "GET" && url.pathname.startsWith("/pets/")) {
+        const [, , petId, ...rest] = url.pathname.split("/");
+        const rel = decodeURIComponent(rest.join("/"));
+        const file = petAsset(petId, rel);
+        if (!file) return json(res, 404, { error: "pet asset not found" });
+        res.writeHead(200, { "content-type": MIME[path.extname(file)] ?? "application/octet-stream" });
+        return fs.createReadStream(file).pipe(res);
+      }
 
       if (route === "GET /api/events") {
         res.writeHead(200, {

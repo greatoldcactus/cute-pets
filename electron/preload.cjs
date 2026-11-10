@@ -10,4 +10,5 @@ contextBridge.exposeInMainWorld("cp", {
   dragEnd: () => ipcRenderer.send("cp:drag-end"),
   setFacing: (facing) => ipcRenderer.send("cp:facing-set", facing),
   onFacing: (cb) => ipcRenderer.on("cp:facing", (_e, facing) => cb(facing)),
+  importPet: (kind) => ipcRenderer.invoke("cp:pick-pet", kind),
 });
