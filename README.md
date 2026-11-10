@@ -67,6 +67,11 @@ share one database.
 pet with the urgent one winning. Bubbles float above the sprite for the sessions that need
 attention; hovering one shows its title, directory, state and the tail of the last message.
 
+**Finished work stays visible.** When a session ends while the pet is running it keeps a
+dashed bubble with a ✓ (up to four, newest first), so you can see what just completed and
+open it — it leaves the pet only when you hide it, and a restart seeds the bubbles with
+anything that finished in the last 15 minutes.
+
 **Approvals** — permission requests are rendered as buttons: *once*, *always*, *reject*.
 Answered from the pet, the TUI never has to be found.
 
