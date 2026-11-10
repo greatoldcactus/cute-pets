@@ -8,8 +8,10 @@ const path = require("node:path");
 const os = require("node:os");
 
 const BRAIN = process.env.CP_URL || "http://127.0.0.1:4280";
-const MIN = { width: 272, height: 404 };
-const EXP = { width: 496, height: 760 };
+// One fixed size: the panel shows/hides inside it, so the window never resizes.
+// Resizing a transparent frameless window on Windows flashes for a frame — this
+// avoids it entirely and keeps the pet anchored in the same pixels.
+const WIN = { width: 560, height: 800 };
 const MARGIN = 22;
 
 let win = null;
@@ -63,10 +65,10 @@ function anchorTo(bounds) {
 app.whenReady().then(() => {
   const area = screen.getPrimaryDisplay().workArea;
   win = new BrowserWindow({
-    width: MIN.width,
-    height: MIN.height,
-    x: area.x + area.width - MIN.width - MARGIN,
-    y: area.y + area.height - MIN.height - MARGIN,
+    width: WIN.width,
+    height: WIN.height,
+    x: area.x + area.width - WIN.width - MARGIN,
+    y: area.y + area.height - WIN.height - MARGIN,
     transparent: true,
     frame: false,
     resizable: false,
@@ -88,9 +90,10 @@ app.whenReady().then(() => {
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.loadURL(`${BRAIN}/min.html`);
 
+  // Kept as a signal only: the window is a fixed size, so expanding never
+  // resizes it (that resize was the source of the one-frame flicker on close).
   ipcMain.on("cp:expanded", (_e, on) => {
     expanded = Boolean(on);
-    win.setBounds(anchorTo(expanded ? EXP : MIN), false);
   });
   ipcMain.on("cp:ignore-mouse", (_e, ignore) => {
     try {
@@ -101,6 +104,16 @@ app.whenReady().then(() => {
 
   // Import a pet pack (.zip file or a folder) through a native dialog, then let
   // the brain copy it into ~/.cute-pets/pets/<id>/.
+  ipcMain.handle("cp:pick-folder", async () => {
+    const res = await dialog.showOpenDialog(win, {
+      title: "Working directory",
+      buttonLabel: "Use folder",
+      properties: ["openDirectory"],
+    });
+    if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+    return { ok: true, path: res.filePaths[0] };
+  });
+
   ipcMain.handle("cp:pick-pet", async (_e, kind) => {
     const properties = kind === "folder" ? ["openDirectory"] : ["openFile"];
     const res = await dialog.showOpenDialog(win, {
