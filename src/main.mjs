@@ -1,14 +1,39 @@
 // cute-pets brain: attaches to one or more running `opencode serve` instances,
 // keeps per-session state, and exposes it to pet faces over HTTP + SSE.
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { PetState, STATE } from "./state.mjs";
 import { OpenCodeClient } from "./opencode.mjs";
 import { findOpencodePorts } from "./discover.mjs";
 import { startServer } from "./server.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+async function waitForHealth(url, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(url + "/global/health", { signal: AbortSignal.timeout(1500) });
+      if (res.ok) return await res.json();
+    } catch {}
+    await sleep(300);
+  }
+  throw new Error(`server did not start: ${url}`);
+}
 const log = (...a) => console.log("[cute-pets]", ...a);
 
 function parseArgs(argv) {
@@ -184,8 +209,59 @@ class Hub {
     }
   }
 
-  async prompt({ server, sessionId, newSession, title, text }) {
+  // Sessions live inside a server that is bound to one directory. A new chat in
+  // another folder therefore needs its own `opencode serve` there.
+  async ensureWorkspace(directory) {
+    const dir = path.resolve(String(directory));
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+      throw new Error(`not a directory: ${dir}`);
+    }
+    for (const [url] of this.clients) {
+      const hit = [...this.store.sessions.values()].some(
+        (s) => s.server === url && s.directory && path.resolve(s.directory) === dir,
+      );
+      if (hit) return { server: url, directory: dir, reused: true };
+    }
+    const port = await freePort();
+    const url = `http://127.0.0.1:${port}`;
+    const child = spawn("opencode", ["serve", "--port", String(port)], {
+      cwd: dir,
+      detached: true,
+      stdio: "ignore",
+      shell: process.platform === "win32",
+    });
+    child.unref();
+    log(`spawned opencode serve for ${dir} on ${port}`);
+    await waitForHealth(url);
+    await this.attach(url, { directory: dir });
+    return { server: url, directory: dir, spawned: true };
+  }
+
+  workspaces() {
+    const byDir = new Map();
+    for (const rec of this.store.sessions.values()) {
+      if (!rec.directory) continue;
+      const dir = rec.directory;
+      const entry = byDir.get(dir) ?? { directory: dir, dirName: dir.split(/[\\/]/).filter(Boolean).pop(), sessions: 0, server: rec.server };
+      entry.sessions += 1;
+      byDir.set(dir, entry);
+    }
+    return [...byDir.values()].sort((a, b) => b.sessions - a.sessions);
+  }
+
+  async commands({ server }) {
     const url = this.pickServer(server);
+    const entry = url && this.clients.get(url);
+    if (!entry) return [];
+    return entry.client.commands();
+  }
+
+  async prompt({ server, sessionId, newSession, title, text, command, directory }) {
+    let url = this.pickServer(server);
+    if (!url && directory) {
+      const ws = await this.ensureWorkspace(directory);
+      url = ws.server;
+    }
     if (!url) throw new Error("no opencode server attached");
     let entry = this.clients.get(url);
     if (!entry || !entry.client.online) {
@@ -205,7 +281,14 @@ class Hub {
       rec.updatedAt = Date.now();
       this.store.touch();
     }
-    await client.prompt(id, text);
+    if (command) {
+      // `/command` blocks until the command finishes; don't hold the face request.
+      void client
+        .command(id, { command, args: text ?? "" })
+        .catch((err) => log(`command ${command} failed: ${err.message ?? err}`));
+    } else {
+      await client.prompt(id, text);
+    }
     return { server: url, sessionId: id };
   }
 

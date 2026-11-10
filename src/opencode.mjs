@@ -15,7 +15,7 @@ export class OpenCodeClient {
     const res = await fetch(this.baseUrl + path, {
       ...init,
       headers: { "content-type": "application/json", ...(init.headers || {}) },
-      signal: AbortSignal.timeout(init.timeout ?? 20000),
+      signal: init.timeout === 0 ? undefined : AbortSignal.timeout(init.timeout ?? 20000),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
@@ -34,6 +34,17 @@ export class OpenCodeClient {
   statuses() { return this.get("/session/status"); }
   permissions() { return this.get("/permission"); }
   messages(id, limit = 20) { return this.get(`/session/${enc(id)}/message?limit=${limit}`); }
+  commands() { return this.get("/command"); }
+  // Runs synchronously on the server (returns when the command finishes), so the
+  // caller must not await it on the request path.
+  command(id, { command, args = "" }) {
+    return this.#req(`/session/${enc(id)}/command`, {
+      method: "POST",
+      body: JSON.stringify({ command, arguments: args }),
+      timeout: 0,
+    });
+  }
+  path() { return this.get("/path"); }
   createSession(body = {}) { return this.post("/session", body); }
   prompt(id, text, extra = {}) {
     return this.post(`/session/${enc(id)}/prompt_async`, { parts: [{ type: "text", text }], ...extra });

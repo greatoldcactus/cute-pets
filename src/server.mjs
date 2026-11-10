@@ -69,6 +69,19 @@ export function startServer({ port, host, store, api }) {
 
       if (route === "GET /api/pets") return json(res, 200, listPets());
 
+      if (route === "GET /api/commands") {
+        const commands = await api.commands({ server: url.searchParams.get("server") });
+        return json(res, 200, { commands });
+      }
+
+      if (route === "GET /api/workspaces") return json(res, 200, { workspaces: api.workspaces() });
+
+      if (route === "POST /api/workspace") {
+        const body = await readBody(req);
+        const ws = await api.ensureWorkspace(body.directory);
+        return json(res, 200, ws);
+      }
+
       if (route === "POST /api/pets/import") {
         const body = await readBody(req);
         const pet = importPet(body.path);
@@ -129,13 +142,18 @@ export function startServer({ port, host, store, api }) {
 
       if (route === "POST /api/prompt") {
         const body = await readBody(req);
-        if (!body.text || typeof body.text !== "string") return json(res, 400, { error: "text required" });
+        const hasCommand = typeof body.command === "string" && body.command.length > 0;
+        if (!hasCommand && (!body.text || typeof body.text !== "string")) {
+          return json(res, 400, { error: "text or command required" });
+        }
         const out = await api.prompt({
           server: body.server ?? null,
           sessionId: body.sessionId ?? null,
           newSession: Boolean(body.newSession),
           title: body.title ?? null,
           text: body.text,
+          command: body.command ?? null,
+          directory: body.directory ?? null,
         });
         return json(res, 200, out);
       }

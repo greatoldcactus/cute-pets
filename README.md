@@ -75,6 +75,17 @@ Without it, discovery still works by port scan.
 - **Approves or rejects permission requests** from the face — `once` / `always` / `reject`.
 - Sends new requests (new session or into an existing one) and aborts a running session.
 
+## Panel
+
+- **Two panes**: session list on the left stays visible while a conversation opens on the right.
+- **Right-click the pet** for quick actions: New chat…, Sessions, Pets, Settings, Hide, Quit.
+- **New chat** picks a working directory — a suggestion from your recent sessions or any folder
+  via the system picker. A folder without a running server gets its own `opencode serve`.
+- **`/` in the composer** lists OpenCode commands with their descriptions; arrow keys or Tab to
+  pick, Enter to run. Commands go through `POST /session/{id}/command`.
+- **Hover a bubble** to see the session, its state and the tail of its last message.
+- The window is a **fixed size** — expanding the panel never resizes it, so nothing flickers.
+
 ## Moving and facing the pet
 
 Drag her by the sprite: the window follows the cursor, clamped to the work area. A press
