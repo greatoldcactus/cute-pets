@@ -1,159 +1,231 @@
 # cute-pets
 
 Desktop pets for [OpenCode](https://opencode.ai) that show **real sessions** — titles,
-states, approvals, and chat — instead of a decorative bubble.
+states, approvals and chat — instead of a decorative bubble.
 
-You already see the difference: Codex Pets tell you *"Needs input"* and let you jump
-back to the thread. OpenPets tells you *"thinking…"* and nothing else. cute-pets is
-built the other way round: it is a **client of OpenCode's own server API**, so it
-knows your session titles, which session is blocked on approval, what the model
-just said, and it can type back into any session.
+![cute-pets](docs/screenshot.png)
+
+Codex Pets can do this because it *is* a client of its agent. So is cute-pets: it is a
+client of OpenCode's own HTTP+SSE server, not an MCP sink. It knows your session titles,
+which session is blocked on an approval, what the model just said, and it can type back
+into any of them. No tokens spent, no hooks required.
 
 ```
-cute-pets/
-  src/          brain daemon (Node 22, zero dependencies)
-  plugin/       OpenCode plugin that points the brain at a running server
-  faces/web/    browser face (session tray + approvals + chat)
-  scripts/      smoke test
+          opencode serve ──HTTP+SSE──▶ brain ──HTTP+SSE──▶ faces
+                 ▲                    (src/)               ├─ Electron pet window
+                 └── plugin announce ──┘                   └─ web tray / pet-only
 ```
 
-## Run it
+- **brain** (`src/`, Node 22, zero runtime dependencies) — holds the OpenCode client,
+  the state machine, the permission queue, and serves snapshots.
+- **faces** (`electron/`, `faces/web/`) — a frameless always-on-top sprite window and a
+  browser session tray. Both render the same `{pet, sessions, permissions}` snapshot.
+- **plugin** (`plugin/cute-pets.ts`, optional) — tells the brain where a server lives.
 
-Requirements: Node ≥ 22 and the `opencode` CLI on PATH.
+---
+
+## Install and run
+
+Requirements: **Node ≥ 22**, the **opencode** CLI on `PATH`, and (for the pet window)
+Electron, which is already a devDependency.
 
 ```bash
-cd C:/projects/cute-pets
-npm install                                  # first time
-node node_modules/electron/install.js        # only if the Electron binary is missing
+npm install
+node node_modules/electron/install.js    # only if "Electron failed to install correctly"
 
-npm run brain     # terminal 1: brain on http://127.0.0.1:4280
-npm run shell     # terminal 2: the floating pet
+npm run brain    # terminal 1 — brain on http://127.0.0.1:4280
+npm run shell    # terminal 2 — the floating pet
 ```
 
-The shell finds opencode servers by itself (it scans listening ports of `opencode`
-processes), so you do not have to point it at anything. Start `opencode` / the TUI
-whenever you like — new servers are picked up within ~10 s.
+The brain finds `opencode` servers by itself: it scans the listening ports of `opencode`
+processes and probes `/global/health` (v1) or `/api/info` (v2). Start a TUI whenever you
+like — new servers are picked up within ~10 seconds.
 
-Useful extras:
+Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
+<http://127.0.0.1:4280/min.html> (pet-only view).
+
+### Five things to try first
+
+1. **Click the pet** — the panel opens next to her; click again to close.
+2. **Drag her** anywhere, including to the very top of the screen. Double-click flips the
+   sprite horizontally.
+3. **`+`** opens a compact popover: type a request, pick a folder, start a chat.
+4. **`/` in the composer** lists commands — agent ones (`/init`, `/review`) and pet ones
+   (`/model`, `/agent`, `/compact`, `/undo`, `/redo`, `/share`, `/abort`, `/pets`).
+5. **Right-click a session or bubble → Hide from pet** to clear finished work out of the
+   way. Nothing is deleted; Settings has an *unhide* list.
+
+---
+
+## What it does
+
+**Sessions** — every session with its real title, project directory, agent, model and
+token/cost totals, deduplicated across the several `opencode serve` processes that can
+share one database.
+
+**States** — `running`, `waiting` (an approval is pending), `error`, `idle`, rolled up per
+pet with the urgent one winning. Bubbles float above the sprite for the sessions that need
+attention; hovering one shows its title, directory, state and the tail of the last message.
+
+**Approvals** — permission requests are rendered as buttons: *once*, *always*, *reject*.
+Answered from the pet, the TUI never has to be found.
+
+**Chat** — type into any session from the panel, or start a new one. A folder without a
+running server gets its own `opencode serve` (Windows paths only — a Linux path must be an
+attached WSL server, and the brain says so instead of guessing).
+
+**New chat popover** — prompt, folder, start; four lines instead of a full panel. `Ctrl+N`
+and the pet's right-click menu reach the same thing.
+
+**Pet packs** — Codex/OpenPets-compatible spritesheets (192×208 cells, 8 columns). Import a
+`.zip` or a folder, switch at runtime, mirror the sprite.
+
+**Placement** — the window is a fixed 560×800 with a transparent margin. Dragging clamps the
+*sprite*, not the window, so she can be parked against the top edge. When there is no room
+above her, the panel flips **below** and the window shifts by the same amount, so the sprite
+never appears to jump. Menus are placed to the side of the sprite and never cover her.
+
+**Hidden sessions** — pet-side only: the session keeps existing (and running) in OpenCode,
+it just stops appearing on the pet. Persisted in `~/.cute-pets/hidden.json`, restorable from
+*Settings → Hidden from pet*.
+
+---
+
+## Pet packs
 
 ```bash
-npm run pets -- list                              # installed pets, * = active
-npm run pets -- import brawl-worker               # a Codex pet id
-npm run pets -- import C:/path/pack.zip           # a .zip pack or a folder
-npm run pets -- use saber                         # switch
-
-npm run shell -- --facing left                    # override facing for one run
-npm run smoke                                     # end-to-end check against the brain
+npm run pets -- list                         # installed pets, * = active
+npm run pets -- import brawl-worker          # by Codex pet id (~/.codex/pets/<id>)
+npm run pets -- import C:/path/pack.zip      # a .zip or a directory
+npm run pets -- use saber                    # switch
 ```
 
-Browser face instead of the floating window: open **http://127.0.0.1:4280** (full
-session tray, approvals, chat) — or `/min.html` for the pet-only view.
+A pack is a directory with `pet.json` and a spritesheet:
 
-Config lives in `~/.cute-pets/config.json` (`facing`, `activePet`); pets are stored in
-`~/.cute-pets/pets/<id>/`; a running brain writes `~/.cute-pets/brain.json`.
+```json
+{
+  "id": "saber",
+  "displayName": "Saber",
+  "description": "A watchful Saber companion in blue and silver armor.",
+  "spriteVersionNumber": 2,
+  "spritesheetPath": "spritesheet.webp"
+}
+```
 
-### Optional: zero-config attachment
+Cells are 192×208, 8 columns; rows map to the pet's animations. Packs live in
+`~/.cute-pets/pets/<id>/`, and the active one is `activePet` in the config.
 
-Copy `plugin/cute-pets.ts` into `~/.config/opencode/plugins/` (auto-discovered). The
-plugin announces the server URL to the brain every 30 s, so ordering never matters.
-Without it, discovery still works by port scan.
+---
 
-### Troubleshooting
+## Connecting servers
 
-- `EADDRINUSE` on 4280 — an older brain is still running: find the PID with
-  `netstat -ano | findstr :4280` and `taskkill /F /PID <pid>`.
-- `Electron failed to install correctly` — run `node node_modules/electron/install.js`.
-- Pet shows but nothing reacts — check `curl http://127.0.0.1:4280/api/state`; if
-  `servers` is empty, no opencode server is running.
-
-## What it does today
-
-- Lists every session with its real title, project directory, agent and token/cost totals.
-- Tracks per-session state from the event bus: `running` / `waiting` (approval pending) /
-  `error` / `idle`, with a pet-level rollup that prioritizes what needs you.
-- Shows the streaming tail of the assistant's latest message.
-- **Approves or rejects permission requests** from the face — `once` / `always` / `reject`.
-- Sends new requests (new session or into an existing one) and aborts a running session.
-
-## Attaching servers elsewhere (WSL, another machine)
-
-The brain talks to any reachable `opencode serve`, not just local processes:
+Local processes are discovered automatically. Anything else can be attached:
 
 ```bash
 curl -X POST http://127.0.0.1:4280/api/attach -d '{"url":"http://localhost:4096"}'
 curl -X POST http://127.0.0.1:4280/api/detach -d '{"url":"http://localhost:4096"}'
 ```
 
-Attached URLs are saved in `~/.cute-pets/config.json` under `servers` and re-attached on
-start, so a WSL instance only has to be attached once. WSL2 forwards `localhost`, so a
-server started inside WSL as `opencode serve --hostname 0.0.0.0 --port 4096` is reachable
-from Windows at `http://localhost:4096`.
+Attached URLs are saved under `servers` in `~/.cute-pets/config.json` and re-attached at
+start. WSL2 forwards `localhost`, so a server started inside WSL as
+`opencode serve --hostname 0.0.0.0 --port 4096` is reachable from Windows at
+`http://localhost:4096`.
 
-**OpenCode 2 is supported.** The brain probes `/global/health` (v1) and falls back to
-`/api/info` (v2), then picks the matching client. v2 needs HTTP Basic credentials:
+**OpenCode 2** needs HTTP Basic credentials (`opencode:<password>`):
 
 ```bash
-# start the WSL server with a known password
-OPENCODE_SERVER_PASSWORD=*** /home/user/.opencode/bin/opencode serve --hostname 0.0.0.0 --port 4301
+# in WSL
+OPENCODE_SERVER_PASSWORD=… /home/user/.opencode/bin/opencode serve --hostname 0.0.0.0 --port 4301
 
-# attach once from Windows; the credential is stored and reused on every start
+# once, from Windows — the credential is stored and reused at every start
 curl -X POST http://127.0.0.1:4280/api/attach \
-  -d '{"url":"http://localhost:4301","password":"***"}'
+  -d '{"url":"http://localhost:4301","password":"…"}'
 ```
 
-or `npm run brain -- --server http://localhost:4301 --password ***`. A managed v2 service
-writes `~/.local/state/opencode/service.json` with its url and password.
+or `npm run brain -- --server http://localhost:4301 --password …`. A managed v2 service
+writes `~/.local/state/opencode/service.json` with its URL and password.
 
-v2 limitations: `/model`, `/agent`, `/compact`, `/share`, `/undo`, `/redo` are not wired
-(request bodies differ and were not verified); prompts are sent with `delivery: "queue"`.
+v2 differences worth knowing: prompts are sent with `delivery: "queue"` (the default
+`steer` is dropped when no turn is running), messages come newest-first with `content[]`
+instead of `parts[]`, and user text sits at `m.text`. `/model`, `/agent`, `/compact`,
+`/share`, `/undo`, `/redo` are **not wired for v2** — their request bodies differ and were
+not verified.
 
-New chats never spawn a server for a Linux path from Windows; the brain returns an error
-telling you to attach the WSL server instead.
+---
 
-## Panel
+## Configuration and files
 
-- **Two panes**: session list on the left stays visible while a conversation opens on the right.
-- **Right-click the pet** for quick actions: New chat…, Sessions, Pets, Settings, Hide, Quit.
-- **New chat** picks a working directory — a suggestion from your recent sessions or any folder
-  via the system picker. A folder without a running server gets its own `opencode serve`.
-- **`/` in the composer** lists two kinds of commands, arrow keys or Tab to pick, Enter to run:
-  - **agent commands** from `GET /command` (`init`, `review`, `customize-opencode`) — sent through
-    `POST /session/{id}/command`, which runs synchronously server-side.
-  - **pet commands** (`new`, `sessions`, `model`, `agent`, `compact`, `undo`, `redo`, `share`,
-    `abort`, `pets`, `settings`, `help`). The TUI-only slash commands never appear in
-    `GET /command`, so the pet re-implements them on the server API — `/model` and `/agent`
-    open a picker, `/undo` reverts the last user message, `/share` copies a link.
-- **Hover a bubble** to see the session, its state and the tail of its last message.
-- The window is a **fixed size** — expanding the panel never resizes it, so nothing flickers.
+| Path | What |
+| --- | --- |
+| `~/.cute-pets/config.json` | `facing`, `activePet`, attached `servers` (with credentials) |
+| `~/.cute-pets/pets/<id>/` | imported pet packs |
+| `~/.cute-pets/hidden.json` | sessions hidden from the pet |
+| `~/.cute-pets/brain.json` | written by a running brain |
+| `~/.cute-pets/brain.log` | brain log (same lines as stdout) |
 
-## Moving and facing the pet
-
-Drag her by the sprite: the window follows the cursor, clamped to the work area. A press
-that moves less than 4px counts as a click and opens the panel instead.
-
-Facing is **not** derived from where the window sits — it is a config value:
+Facing is a config value, never inferred from screen position:
 
 ```json
-// ~/.cute-pets/config.json
 { "facing": "left" }
 ```
 
-- `"right"` (default) — sprite as authored
-- `"left"` — horizontally mirrored
-- override per launch: `npx electron electron/main.cjs --facing left`
-- double-click the pet to flip and save it
+`right` (default) is the sprite as authored, `left` is mirrored. Override per launch with
+`npm run shell -- --facing left`.
 
-## Architecture
+---
+
+## Brain API
+
+Everything a face needs, all JSON:
 
 ```
-opencode serve  ──HTTP+SSE──▶  brain (src/)  ──HTTP+SSE──▶  faces (web, later Electron)
-       ▲                          │
-       └──── plugin announce ─────┘
+GET  /api/state            {pet, sessions[], permissions[], servers[], hidden[]}
+GET  /api/events           SSE stream of the same snapshot
+GET  /api/health           {ok, uptime}
+GET  /api/pet  /api/pets   active pet + installed packs
+POST /api/pets/import      {path}            .zip or folder
+POST /api/pets/active      {id}
+GET  /api/commands         agent commands from OpenCode (init, review, …)
+GET  /api/models  /api/agents  /api/workspaces
+POST /api/prompt           {text, sessionId?|newSession, directory?, model?, agent?}
+GET  /api/messages         ?server=&sessionId=&limit=
+POST /api/permission       {id, reply: once|always|reject}
+POST /api/abort            {server, sessionId}
+POST /api/session/hide     {sessionId, hidden:true|false}
+POST /api/session/action   {sessionId, action: compact|undo|redo|share|model|agent, …}
+POST /api/attach  /api/detach  /api/announce
+POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI uses it
 ```
 
-The brain holds no model logic and no UI. Faces are replaceable: the web face today,
-an Electron pet window tomorrow, each rendering the same `pet / sessions / permissions`
-snapshot.
+---
 
-See `SPEC.md` for the verified API surface, the state mapping, and the cross-platform
-plan (X11 / Wayland / Windows).
+## Limitations
+
+- OpenCode 2: model switch, agent switch, compact, share, undo/redo are v1-only.
+- Permission replies on v2 use `{action, resources}`; that path has not been exercised
+  against a live request.
+- The window is fixed-size by design (resizing a transparent window flickers on Windows),
+  so the panel flips instead of growing.
+- Linux/macOS: the Electron shell is portable, but only Windows has been run in anger;
+  click-through and work-area clamping are the platform-specific parts.
+
+## Development
+
+```bash
+npm run smoke        # end-to-end: attach, create a session, prompt, read the reply
+```
+
+`npm run shell -- --dev` exposes a control server on `:4290` with `/size`, `/eval?js=…`
+and `/shot?file=…` — that is how the screenshot above was produced.
+
+```
+src/main.mjs        hub: discovery, attach, dispatch, hidden persistence
+src/opencode.mjs    v1 client        src/opencode-v2.mjs  v2 client (auth, /api/*, events)
+src/state.mjs       session/state machine, permissions, snapshots
+src/server.mjs      face API + SSE      src/pets.mjs  pet store      src/config.mjs
+electron/main.cjs   sprite window, drag, dialogs, bounds lock
+faces/web/min.html  the pet window UI   faces/web/index.html  full tray
+```
+
+`SPEC.md` holds the verified OpenCode surface, the state mapping and the cross-platform
+notes.
