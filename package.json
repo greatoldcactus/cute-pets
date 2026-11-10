@@ -1,0 +1,14 @@
+{
+  "name": "cute-pets",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Desktop pets for OpenCode that show real sessions: titles, states, approvals, and chat.",
+  "scripts": {
+    "start": "node src/main.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
