@@ -679,7 +679,8 @@ document.addEventListener("mouseout",e=>{ if(e.target.closest(".bub")) tip.class
 /* ---------------- passthrough, events, boot ---------------- */
 document.addEventListener("mousemove",e=>{
   const el=document.elementFromPoint(e.clientX,e.clientY);
-  api.setIgnore(!(el&&el.closest(".interactive, .panel, .petzone, .ctx, .tip, .palette")));
+  // .mini must be here too, or the window stays click-through over the popover
+  api.setIgnore(!(el&&el.closest(".interactive, .panel, .petzone, .ctx, .tip, .palette, .mini")));
 });
 
 async function loadWorkspaces(){

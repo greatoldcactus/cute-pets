@@ -125,17 +125,29 @@ app.whenReady().then(() => {
 
   // Import a pet pack (.zip file or a folder) through a native dialog, then let
   // the brain copy it into ~/.cute-pets/pets/<id>/.
-  ipcMain.handle("cp:pick-folder", async () => {
+  // A native dialog owned by an always-on-top window can open *behind* it, which
+  // looks like the button doing nothing. Drop the flag for the duration.
+  const withDialog = async (fn) => {
+    const wasTop = win.isAlwaysOnTop();
+    if (wasTop) win.setAlwaysOnTop(false);
+    try {
+      return await fn();
+    } finally {
+      if (wasTop) win.setAlwaysOnTop(true, "screen-saver");
+    }
+  };
+
+  ipcMain.handle("cp:pick-folder", () => withDialog(async () => {
     const res = await dialog.showOpenDialog(win, {
       title: "Working directory",
       buttonLabel: "Use folder",
-      properties: ["openDirectory"],
+      properties: ["openDirectory", "createDirectory"],
     });
     if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
     return { ok: true, path: res.filePaths[0] };
-  });
+  }));
 
-  ipcMain.handle("cp:pick-pet", async (_e, kind) => {
+  ipcMain.handle("cp:pick-pet", (_e, kind) => withDialog(async () => {
     const properties = kind === "folder" ? ["openDirectory"] : ["openFile"];
     const res = await dialog.showOpenDialog(win, {
       title: "Import pet",
@@ -154,7 +166,7 @@ app.whenReady().then(() => {
     } catch (err) {
       return { ok: false, error: String(err.message || err) };
     }
-  });
+  }));
 
   ipcMain.on("cp:facing-set", (_e, facing) => {
     if (facing !== "left" && facing !== "right") return;
