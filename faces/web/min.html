@@ -9,7 +9,7 @@ html,body{margin:0;height:100%;background:transparent;overflow:hidden;
 font:13px/1.45 ui-sans-serif,system-ui,"Segoe UI",sans-serif;color:var(--ink);user-select:none}
 .wrap{position:relative;width:100%;height:100%}
 /* ---------- panel ---------- */
-.panel{position:absolute;left:4px;right:4px;top:4px;height:468px;display:none;flex-direction:column;
+.panel{position:absolute;left:4px;right:4px;top:4px;bottom:226px;display:none;flex-direction:column;
 background:rgba(16,18,25,.98);border:1px solid var(--line);border-radius:14px;overflow:hidden;
 box-shadow:0 18px 44px rgba(0,0,0,.6)}
 body.expanded .panel{display:flex}
@@ -77,15 +77,14 @@ border-radius:10px;box-shadow:0 -10px 26px rgba(0,0,0,.5);overflow:hidden;displa
 .pitem .n.pet{color:#8ee0b0}
 .pitem .d{font-size:10.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* pet */
-.petzone{position:absolute;right:0;bottom:0;width:260px;height:300px;display:flex;flex-direction:column;
+.petzone{position:absolute;right:0;bottom:0;width:260px;height:222px;display:flex;flex-direction:column;
 align-items:center;justify-content:flex-end;padding-bottom:2px}
 body.expanded .petzone{opacity:.92}
 #pet{cursor:grab;width:200px;height:217px;transform-origin:50% 70%;
 filter:drop-shadow(0 12px 16px rgba(0,0,0,.6));transition:transform .35s cubic-bezier(.3,1.4,.5,1)}
 #pet.flip{transform:scaleX(-1)}
 #pet:active{cursor:grabbing}
-.bubbles{display:flex;flex-direction:column;align-items:flex-end;gap:5px;margin-bottom:3px;padding:0 6px;
-max-width:250px}
+.bubbles{position:absolute;bottom:222px;right:0;display:flex;flex-direction:column;align-items:flex-end;gap:5px;padding:0 6px;max-width:250px}
 body.expanded .bubbles{display:none}
 .bub{display:flex;align-items:center;gap:6px;max-width:248px;background:rgba(24,27,36,.95);
 border:1px solid var(--line);border-radius:11px;padding:5px 9px;font:inherit;font-size:11.5px;color:var(--ink);
