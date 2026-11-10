@@ -9,7 +9,7 @@ html,body{margin:0;height:100%;background:transparent;overflow:hidden;
 font:13px/1.45 ui-sans-serif,system-ui,"Segoe UI",sans-serif;color:var(--ink);user-select:none}
 .wrap{position:relative;width:100%;height:100%}
 /* ---------- panel ---------- */
-.panel{position:absolute;left:4px;right:4px;top:4px;bottom:226px;display:none;flex-direction:column;
+.panel{position:absolute;left:4px;right:4px;top:auto;bottom:226px;height:var(--panelH,574px);display:none;flex-direction:column;
 background:rgba(16,18,25,.98);border:1px solid var(--line);border-radius:14px;overflow:hidden;
 box-shadow:0 18px 44px rgba(0,0,0,.6)}
 body.expanded .panel{display:flex}
@@ -77,7 +77,7 @@ border-radius:10px;box-shadow:0 -10px 26px rgba(0,0,0,.5);overflow:hidden;displa
 .pitem .n.pet{color:#8ee0b0}
 .pitem .d{font-size:10.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* pet */
-body.flip .panel{top:226px;bottom:4px}
+body.flip .panel{top:226px;bottom:auto}
 body.flip .petzone{top:0;bottom:auto}
 body.flip .bubbles{bottom:auto;top:220px}
 .mini{position:absolute;right:6px;width:396px;display:none;flex-direction:column;gap:6px;
@@ -251,6 +251,18 @@ function visibleBoxes(){
   }
   return boxes;
 }
+// Moves are only applied once the panel has actually been painted as hidden;
+// otherwise the compositor shows the previous frame at the new window position
+// (the "window teleported for an instant" flash).
+function applyMove(dx,dy,done){
+  dx=Math.round(dx||0); dy=Math.round(dy||0);
+  if(!dx&&!dy){ done&&done(); return; }
+  document.body.classList.add("switching");
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    api.moveBy(dx,dy);
+    setTimeout(()=>{ document.body.classList.remove("switching"); done&&done(); },70);
+  }));
+}
 function fitOnScreen(){
   const al=screen.availLeft??0, at=screen.availTop??0;
   const aw=screen.availWidth||screen.width, ah=screen.availHeight||screen.height;
@@ -267,7 +279,7 @@ function fitOnScreen(){
   const pT=window.screenY+p.top+dy, pB=window.screenY+p.bottom+dy;
   if(pT<at) dy+=(at-pT);
   if(pB>at+ah) dy-=((pB)-(at+ah));
-  if(Math.abs(dx)>=1||Math.abs(dy)>=1) api.moveBy(Math.round(dx), Math.round(dy));
+  if(Math.abs(dx)>=1||Math.abs(dy)>=1) applyMove(dx,dy);
 }
 function setExpanded(on){
   if(on===expanded) return;
@@ -285,17 +297,29 @@ function setExpanded(on){
   // If there is no room above the pet for the panel, render it below instead and
   // move the window down by the same amount so the pet does not appear to jump.
   const petTopScreen=window.screenY+before;
-  const petBottomScreen=petTopScreen+petRect().height;
+  const petH=petRect().height;
+  const petBottomScreen=petTopScreen+petH;
   const at=screen.availTop??0, ah=screen.availHeight||screen.height;
-  const roomAbove=petTopScreen-at;
-  const roomBelow=(at+ah)-petBottomScreen;
-  // above by default; go below when there is no room above but there is below
-  const flip=on && (roomAbove < PANEL_H+12) && (roomBelow > roomAbove);
-  document.body.classList.toggle("flip",flip);
+  const roomAbove=petTopScreen-at-10;
+  const roomBelow=(at+ah)-petBottomScreen-10;
+  const MINH=340;
+  let flip=false, panelH=PANEL_H;
+  if(roomAbove>=PANEL_H)      { panelH=PANEL_H; }
+  else if(roomAbove>=MINH)    { panelH=roomAbove; }                 // shrink, stay above
+  else if(roomBelow>=PANEL_H) { flip=true; panelH=PANEL_H; }        // go below
+  else if(roomBelow>=MINH)    { flip=true; panelH=roomBelow; }
+  else {                       // no comfortable room anywhere: pick the larger side
+    flip=roomBelow>roomAbove;
+    panelH=Math.max(220,Math.min(PANEL_H,Math.max(roomAbove,roomBelow)));
+  }
+  document.documentElement.style.setProperty("--panelH",Math.round(panelH)+"px");
+  document.body.classList.toggle("flip",on&&flip);
   const after=petRect().top;
-  if(api.moveBy && before!==after) api.moveBy(0, Math.round(before-after));
+  // keeping the sprite where it is on screen is the whole point: move only when the
+  // panel had to change sides, and do it while the panel is hidden
+  if(on) applyMove(0, Math.round(before-after), ()=>scheduleFit());
+  else   applyMove(0, Math.round(before-after));
   api.setExpanded(on);
-  if(on) scheduleFit();
   if(!on) document.body.classList.remove("mini-open");
 }
 function showView(v){ view=v; render(); }

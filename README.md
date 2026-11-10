@@ -87,9 +87,13 @@ red-armoured chibi knight ships in the repo and is installed by default; any `.z
 folder can be imported, switched at runtime and mirrored.
 
 **Placement** — the window is a fixed 560×800 with a transparent margin. Dragging clamps the
-*sprite*, not the window, so she can be parked against the top edge. When there is no room
-above her, the panel flips **below** and the window shifts by the same amount, so the sprite
-never appears to jump. Menus are placed to the side of the sprite and never cover her.
+*sprite*, not the window, so she can be parked against the top edge.
+
+Opening the panel never moves the sprite. The panel is sized to the room that actually
+exists on screen (574 px when there is space, less when there is not) and drawn below the
+sprite when there is no room above. Only a forced side change moves the window, and that
+move happens while the panel is `visibility:hidden`, so nothing flashes at the old position.
+Menus are placed to the side of the sprite and never cover her.
 
 **Hidden sessions** — pet-side only: the session keeps existing (and running) in OpenCode,
 it just stops appearing on the pet. Persisted in `~/.cute-pets/hidden.json`, restorable from
