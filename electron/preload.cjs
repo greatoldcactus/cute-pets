@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld("cp", {
   onFacing: (cb) => ipcRenderer.on("cp:facing", (_e, facing) => cb(facing)),
   setAuras: (on) => ipcRenderer.send("cp:auras-set", on),
   onAuras: (cb) => ipcRenderer.on("cp:auras", (_e, on) => cb(Boolean(on))),
+  setSendWith: (mode) => ipcRenderer.send("cp:sendwith-set", mode),
+  onSendWith: (cb) => ipcRenderer.on("cp:sendwith", (_e, mode) => cb(mode)),
   writeClipboard: (text) => ipcRenderer.invoke("cp:clipboard-write", text),
   importPet: (kind) => ipcRenderer.invoke("cp:pick-pet", kind),
   pickFolder: () => ipcRenderer.invoke("cp:pick-folder"),

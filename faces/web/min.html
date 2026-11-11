@@ -297,7 +297,7 @@ body.mode-panel .mini{left:0;right:0;top:0;bottom:auto;width:auto}
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const api=window.cp||{setFacing(){},onFacing(){},setAuras(){},onAuras(){},onPanel(){},onPanelCommand(){},panel(){},panelSize(){},
+const api=window.cp||{setFacing(){},onFacing(){},setAuras(){},onAuras(){},setSendWith(){},onSendWith(){},onPanel(){},onPanelCommand(){},panel(){},panelSize(){},
   bubblesSize(){},tooltip(){},onTooltip(){},petMenu(){},bubbleMenu(){},pickFolder:async()=>({ok:false})};
 // One page, three windows: #pet is the sprite, #bubbles the bubble stack, #panel
 // the sessions/chat/settings UI.
@@ -325,6 +325,7 @@ const AURA_STATES=["idle","running","waiting","error","plan"];
 const img=new Image(), cv=$("#pet"), ctx2=cv.getContext("2d");
 const valid={}; let petState="idle", facing="right", petKey="";
 let aurasEnabled=true;
+let sendWith="ctrl-enter";
 document.body.classList.add("auras-on");
 function measure(){
   const c=document.createElement("canvas"); c.width=FW; c.height=FH; const g=c.getContext("2d");
@@ -367,8 +368,23 @@ function applyAuras(on){
   document.body.classList.toggle("auras-on",aurasEnabled);
   if(changed&&IS_PANEL&&view==="settings") render();
 }
+function updateComposerHint(){
+  const el=$("#prompt"); if(!el) return;
+  el.placeholder=sendWith==="enter"
+    ? "Message — Enter to send · Shift+Enter for a newline"
+    : "Message — / for commands · Ctrl+Enter to send";
+}
+function applySendWith(mode){
+  const next=mode==="enter"?"enter":"ctrl-enter";
+  const changed=sendWith!==next;
+  sendWith=next;
+  updateComposerHint();
+  if(changed&&IS_PANEL&&view==="settings") render();
+}
 api.onFacing((f)=>{ facing=f; applyFacing(); });
 api.onAuras((on)=>applyAuras(on));
+api.onSendWith((mode)=>applySendWith(mode));
+updateComposerHint();
 
 /* ---------------- helpers ---------------- */
 async function post(path, body){
@@ -878,6 +894,12 @@ function settingsHtml(){
         <button class="pbtn ${!aurasEnabled?"on":""}" data-auras="off">off</button>
       </div>
       <div class="ssub">glow for idle, running, waiting, error and plan</div></div>
+    <div class="field"><label>Send message</label>
+      <div class="btnrow">
+        <button class="pbtn ${sendWith==="ctrl-enter"?"on":""}" data-send-with="ctrl-enter">Ctrl/Cmd+Enter</button>
+        <button class="pbtn ${sendWith==="enter"?"on":""}" data-send-with="enter">Enter</button>
+      </div>
+      <div class="ssub">${sendWith==="enter"?"Enter sends · Shift+Enter adds a newline":"Ctrl/Cmd+Enter sends · Enter adds a newline"}</div></div>
     <div class="field"><label>Config</label><div class="ssub" style="font-family:ui-monospace,monospace">~/.cute-pets/config.json</div></div>
     <div class="field"><label>Pets folder</label><div class="ssub" style="font-family:ui-monospace,monospace">~/.cute-pets/pets/</div></div>
     <div class="field"><label>Sessions</label><div class="ssub">${state.sessions.length} tracked across ${(state.servers||[]).filter(s=>s.online).length} servers</div></div>
@@ -1119,6 +1141,8 @@ document.addEventListener("click",async e=>{
   if(face){ facing=face.dataset.facing; applyFacing(); api.setFacing(facing); render(); return; }
   const aura=e.target.closest("[data-auras]");
   if(aura){ applyAuras(aura.dataset.auras==="on"); api.setAuras(aurasEnabled); render(); return; }
+  const sendMode=e.target.closest("[data-send-with]");
+  if(sendMode){ applySendWith(sendMode.dataset.sendWith); api.setSendWith(sendWith); render(); return; }
   if(e.target.id==="btnNew"){ startDraft(); return; }
   if(e.target.id==="miniX"){ setExpanded(false); return; }
   if(e.target.id==="miniDirBtn"){ const r=await api.pickFolder(); if(r&&r.ok){ newDir=r.path; $("#miniDir").textContent=r.path; } return; }
@@ -1439,9 +1463,13 @@ $("#prompt").addEventListener("keydown",e=>{
     e.preventDefault(); choosePalette(palSel);
   } else if(e.key==="Escape"){ closePalette(); }
 });
-// Enter inserts a newline; Ctrl/Cmd+Enter sends.
+// Enter inserts a newline by default; Ctrl/Cmd+Enter sends. In "Enter" mode
+// Enter sends and Shift+Enter inserts the newline.
 $("#prompt").addEventListener("keydown",e=>{
-  if(e.key!=="Enter"||(!e.ctrlKey&&!e.metaKey)||e.isComposing) return;
+  if(e.key!=="Enter"||e.isComposing||e.defaultPrevented) return;
+  const ctrl=e.ctrlKey||e.metaKey;
+  const send=sendWith==="enter" ? !e.shiftKey : ctrl;
+  if(!send) return;
   e.preventDefault();
   closePalette();
   $("#composer").requestSubmit();
