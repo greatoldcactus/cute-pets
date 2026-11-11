@@ -86,16 +86,27 @@ order: `waiting > error > running > idle`.
 | `form.replied` / `form.cancelled` (v2) | drop the form, recompute waiting |
 | `message.part.updated` (text) | `lastText` tail |
 | `message.part.delta` | append to `lastText` |
+| `session.deleted` | remove the session immediately |
+| `session.activity` (v2 reasoning/tool) | update the live trace preview |
+
+`GET /api/session` is authoritative on the 30 s sync; sessions that disappear from it are
+removed, which also cleans up deleted sessions whose event was missed.
 
 Pet rollup: `waiting` if any session waits, else `error`, else `running`, else `idle`;
 label like "2 need you" / "1 failed" / "3 working" / "all done". If the driving session
 uses the `plan` agent and is not idle, the snapshot's `pet.plan` is true and the kind is
 `planning`.
 
-Message errors are rendered as fatal (red) only when the turn did not continue: if an
-assistant message without an error follows before the next user message, the earlier error
-was retried and is shown muted as `retried`. The same rule keeps the collapsed process
+Message errors are rendered as fatal (red) only when the turn did not continue: if any
+later assistant message without an error exists, the earlier error was retried and is
+shown muted as `retried`. A retryable error (429/5xx/network/timeout) is shown as
+`retrying` while the session is still running. The same rule keeps the collapsed process
 trace from turning red for a recovered provider/tool failure.
+
+Session records include a live `activity`
+`{kind:"thinking"|"tool", text, tool, detail, status, at}` from v2
+`session.reasoning.*` and `session.tool.*` events; the face uses it for the last process
+trace preview and clears it when the session becomes idle.
 
 ## 5. Face API (stable contract)
 
@@ -115,10 +126,13 @@ trace from turning red for a recovered provider/tool failure.
 - `GET /api/messages?server&sessionId&limit` — normalized
   `{role, parts, tokens, time, error}`; parts are `text`, `reasoning`, `tool`
   (`name/status/input/output`) or `file`, so faces can collapse the process trace
+- `GET /api/message-page?server&sessionId&limit&order&type&cursor&compact`
+  — the same normalized messages plus the v2 `cursor` (`{previous,next}`). Cursor pages
+  are used for “Load earlier”; `type=user&order=asc&limit=1` fetches the opening prompt.
 - `POST /api/announce` — plugin discovery `{serverUrl, directory}`
 - `GET /` — web face
 
-Session object: `{server,id,title,slug,directory,dirName,agent,model,state,detail,tokens,cost,lastText,updatedAt,pending[],forms[]}`.
+Session object: `{server,id,title,slug,directory,dirName,agent,model,state,detail,activity,tokens,cost,lastText,updatedAt,pending[],forms[]}`.
 
 ## 6. Pet rendering
 
@@ -214,7 +228,9 @@ Wayland may still refuse programmatic positioning; the shell's XWayland mode is 
   `content[]` instead of `parts[]` (user text is `m.text`), newest-first message order,
   `delivery:"queue"` for prompts, `interrupt` instead of `abort`, `{action,resources}`
   permission replies, and event translation
-  (`session.execution.*`/`session.text.*` → v1 names). Fork is implemented
+  (`session.execution.*`/`session.text.*` → v1 names, plus `session.deleted`,
+  `session.reasoning.*` and `session.tool.*` for the live activity preview). Fork is
+  implemented
   (`POST /api/session/{id}/fork`; `session.forked` carries no info, so the client fetches
   the new session to pick up its `(fork #N)` title). Model/agent switch
   (`/api/session/{id}/model`, `/agent`), session move (`/api/session/{id}/move`) and

@@ -77,6 +77,18 @@ function modelRef(model) {
   if (!model) return null;
   return { id: model.id, providerID: model.providerID, variant: model.variant ?? "default" };
 }
+
+// The normalized shape faces consume.
+function faceMessage(m) {
+  return {
+    id: m.info?.id,
+    role: m.info?.role ?? "unknown",
+    time: m.info?.time?.created ?? null,
+    tokens: m.info?.tokens ?? null,
+    error: m.info?.error ?? null,
+    parts: m.parts ?? [],
+  };
+}
 const log = (...a) => {
   const line = `[${new Date().toISOString()}] ${a.join(" ")}`;
   console.log(line);
@@ -315,14 +327,20 @@ class Hub {
     const entry = this.clients.get(url);
     if (!entry) return;
     const { client } = entry;
-    const [sessions, statuses, permissions] = await Promise.all([
-      client.listSessions().catch(() => []),
+    // Keep "listing failed" distinct from "the server has no sessions": only an
+    // authoritative list may prune records.
+    let sessions = null;
+    try { sessions = await client.listSessions(); } catch {}
+    const [statuses, permissions] = await Promise.all([
       client.statuses().catch(() => ({})),
       client.permissions().catch(() => []),
     ]);
-    for (const info of sessions ?? []) this.store.upsertSession(url, info);
-    for (const info of sessions ?? []) {
-      if (statuses?.[info.id]) this.store.setStatus(url, info.id, statuses[info.id]);
+    if (Array.isArray(sessions)) {
+      for (const info of sessions) this.store.upsertSession(url, info);
+      for (const info of sessions) {
+        if (statuses?.[info.id]) this.store.setStatus(url, info.id, statuses[info.id]);
+      }
+      this.store.reconcileSessions(url, sessions.map((s) => s.id));
     }
     this.store.replacePermissions(url, permissions ?? []);
     if (typeof client.forms === "function") {
@@ -378,6 +396,9 @@ class Hub {
         break;
       case "message.part.delta":
         if (p.sessionID) this.store.noteDelta(url, p.sessionID, p.delta);
+        break;
+      case "session.activity":
+        if (p.sessionID && p.activity) this.store.noteActivity(url, p.sessionID, p.activity);
         break;
       case "form.created":
         if (p.form?.id && p.form?.sessionID) {
@@ -780,14 +801,20 @@ class Hub {
     const raw = await entry.client.messages(sessionId, limit);
     // The clients normalize text, reasoning, tool and file parts; the face decides
     // which of them to show collapsed (tool calls, thinking, errors).
-    return (raw ?? []).map((m) => ({
-      id: m.info?.id,
-      role: m.info?.role ?? "unknown",
-      time: m.info?.time?.created ?? null,
-      tokens: m.info?.tokens ?? null,
-      error: m.info?.error ?? null,
-      parts: m.parts ?? [],
-    }));
+    return (raw ?? []).map(faceMessage);
+  }
+
+  async messagePage({ server, sessionId, limit = 40, order = "desc", type = null, cursor = null, compact = false }) {
+    const url = this.pickServer(server);
+    const entry = url && this.clients.get(url);
+    if (!entry || !sessionId) throw new Error("server and sessionId required");
+    if (typeof entry.client.messagePage === "function") {
+      const page = await entry.client.messagePage(sessionId, { limit, order, type, cursor, compact });
+      return { messages: (page.messages ?? []).map(faceMessage), cursor: page.cursor ?? null };
+    }
+    // v1 has no cursor or type filter; return the newest page and no pagination.
+    const raw = await entry.client.messages(sessionId, limit);
+    return { messages: (raw ?? []).map(faceMessage), cursor: null };
   }
 
   async close() {
