@@ -95,7 +95,9 @@ label like "2 need you" / "1 failed" / "3 working" / "all done".
 - `POST /api/prompt` — `{text, sessionId?|server?, newSession?, title?}` → `{server, sessionId}`
 - `POST /api/abort` — `{server, sessionId}`
 - `POST /api/permission` — `{id, reply}`
-- `GET /api/messages?server&sessionId&limit` — normalized `{role, parts, tokens, time}`
+- `GET /api/messages?server&sessionId&limit` — normalized
+  `{role, parts, tokens, time, error}`; parts are `text`, `reasoning`, `tool`
+  (`name/status/input/output`) or `file`, so faces can collapse the process trace
 - `POST /api/announce` — plugin discovery `{serverUrl, directory}`
 - `GET /` — web face
 

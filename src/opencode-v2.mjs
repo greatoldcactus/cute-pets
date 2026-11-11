@@ -99,10 +99,42 @@ export class OpenCodeV2Client {
   }
 
   async messages(id, limit = 20) {
-    const out = await this.#req(`/api/session/${enc(id)}/message`);
-    // v2 returns newest-first and puts user text at the top level
-    const all = [...(out?.data ?? [])].reverse();
-    const rows = all.slice(-limit);
+    // Ask for the newest page instead of the whole history: tool inputs/outputs
+    // can be large and the chat only needs the tail. The response is newest-first.
+    const out = await this.#req(`/api/session/${enc(id)}/message?limit=${encodeURIComponent(String(limit))}&order=desc`);
+    const rows = [...(out?.data ?? [])].reverse();
+    const toolOutput = (st) => {
+      let o = st?.content;
+      if (Array.isArray(o)) o = o.filter((x) => x?.type === "text" && x.text).map((x) => x.text).join("\n");
+      else if (o && typeof o === "object") o = JSON.stringify(o, null, 2);
+      if (st?.error) o = [String(st.error), o || ""].filter(Boolean).join("\n\n");
+      return o || "";
+    };
+    const partsOf = (m) => {
+      const parts = [];
+      if (m.type === "user") {
+        if (m.text) parts.push({ type: "text", text: m.text });
+        for (const f of m.files ?? []) {
+          parts.push({ type: "file", name: f?.name || f?.path || String(f), path: f?.path ?? null });
+        }
+      } else if (m.type === "assistant") {
+        for (const c of m.content ?? []) {
+          if (c.type === "text" && c.text) parts.push({ type: "text", text: c.text });
+          else if (c.type === "reasoning" && c.text) parts.push({ type: "reasoning", text: c.text });
+          else if (c.type === "tool") {
+            const st = c.state ?? {};
+            parts.push({
+              type: "tool",
+              name: c.name || "tool",
+              status: st.status || "unknown",
+              input: st.input ?? null,
+              output: toolOutput(st),
+            });
+          }
+        }
+      }
+      return parts;
+    };
     return rows.map((m) => ({
       info: {
         id: m.id,
@@ -110,12 +142,10 @@ export class OpenCodeV2Client {
         time: { created: m.time?.created ?? null },
         tokens: m.tokens ?? null,
         cost: m.cost ?? null,
+        error: m.error ?? null,
       },
-      parts: (m.type === "user"
-        ? [{ type: "text", text: m.text ?? m.payload?.text ?? "" }]
-        : (m.content ?? []).filter((p) => p.type === "text" && p.text).map((p) => ({ type: "text", text: p.text }))
-      ).filter((p) => p.text),
-    }));
+      parts: partsOf(m),
+    })).filter((m) => m.parts.length || m.info.error);
   }
 
   getSession(id) {

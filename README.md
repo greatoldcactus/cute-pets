@@ -89,6 +89,13 @@ headings, lists, tables, links, inline code, and fenced code blocks with a langu
 and a copy button. Rendering is local and dependency-free, and everything is HTML-escaped
 before markup is added.
 
+The chat opens at the newest message (normal chronological order, scrolled to the bottom);
+after reading back, a small **↓** button returns to the latest. Consecutive assistant
+steps that only contain thinking/tool calls are grouped into one collapsed trace
+(`15 steps · 17 tools · 15 thinking`) per turn, expandable to the individual calls with
+their input/output. Provider errors stay visible as a compact line (muted for aborted
+steps, red for provider failures).
+
 **New chat popover** — prompt, folder, start; four lines instead of a full panel. `Ctrl+N`
 and the pet's right-click menu reach the same thing.
 
@@ -259,6 +266,7 @@ POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI 
 
 - OpenCode 2: model switch, agent switch, compact, share, undo/redo are v1-only;
   fork works on both.
+- The chat loads the last 30 messages only; older history is not paged in yet.
 - Permission replies on v2 use `{action, resources}`; that path has not been exercised
   against a live request.
 - The pet, bubbles and panel are separate windows. The pet window is fixed and never

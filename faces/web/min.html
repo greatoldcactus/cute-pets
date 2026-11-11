@@ -70,6 +70,39 @@ text-transform:none;letter-spacing:0;cursor:pointer;padding:1px 4px;border-radiu
 .msg table{border-collapse:collapse;margin:6px 0;font-size:10.5px;display:block;overflow:auto;max-width:100%}
 .msg th,.msg td{border:1px solid var(--line);padding:3px 6px;text-align:left}
 .msg th{background:#1b202b}.msg del{color:var(--dim)}
+/* collapsed tool / thinking / error trace */
+.msg .trace{margin-top:6px;border-top:1px dashed var(--line);padding-top:5px}
+.msg .trace>summary{cursor:pointer;color:var(--dim);font-size:10px;list-style:none;
+display:flex;align-items:center;gap:5px;user-select:none}
+.msg .trace>summary::-webkit-details-marker{display:none}
+.msg .trace>summary:before{content:"▸";font-size:9px}
+.msg .trace[open]>summary:before{content:"▾"}
+.msg .trace>summary.has-error{color:var(--err)}
+.msg .tracebody{display:flex;flex-direction:column;gap:4px;padding:4px 0 0 10px}
+.msg .toolpart{border-left:2px solid var(--line2);padding-left:7px}
+.msg .toolpart>summary{cursor:pointer;font-size:10px;color:var(--dim);list-style:none;
+display:flex;align-items:baseline;gap:6px}
+.msg .toolpart>summary::-webkit-details-marker{display:none}
+.msg .toolpart>summary:before{content:"›";font-size:10px}
+.msg .toolpart[open]>summary:before{content:"⌄"}
+.msg .toolpart .tname{color:var(--ink);font-family:ui-monospace,monospace;font-size:10px}
+.msg .toolpart .tstatus{font-size:9px;text-transform:uppercase;letter-spacing:.05em}
+.msg .toolpart.error .tstatus{color:var(--err)}
+.msg .toolpart.running .tstatus{color:var(--run)}
+.msg .tlabel{font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;margin-top:4px}
+.msg .trace pre,.msg .trace .rmd{max-height:240px;overflow:auto;white-space:pre-wrap;background:#0d1017;
+border:1px solid var(--line);border-radius:4px;padding:4px 6px;margin:2px 0;font-size:10px}
+.msg .trace .rmd{font-size:10.5px;color:#c6ccdf;white-space:normal}
+.msg-error{margin-top:5px;font-size:10px;color:var(--err);border-left:2px solid var(--err);
+padding-left:6px;overflow-wrap:anywhere}
+.msg-error.muted{color:var(--wait);border-color:var(--wait)}
+/* jump-to-latest */
+.detail{position:relative}
+.tobottom{position:absolute;right:14px;bottom:12px;width:26px;height:26px;border-radius:50%;
+border:1px solid var(--line2);background:rgba(22,25,34,.96);color:var(--ink);display:none;
+align-items:center;justify-content:center;cursor:pointer;z-index:6;font-size:13px;padding:0}
+.tobottom.on{display:flex}
+.tobottom:hover{border-color:#4b5a7e;color:#fff}
 .empty{color:var(--dim);font-size:11.5px;text-align:center;padding:18px 8px}
 .field{display:flex;flex-direction:column;gap:6px}
 .field label{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em}
@@ -182,6 +215,7 @@ body.mode-panel .mini{left:0;right:0;top:0;bottom:auto;width:auto}
           <span class="ssub" id="dmeta" style="flex:none"></span>
           <button class="pbtn" id="dabort" style="display:none">stop</button></div>
         <div class="dbody" id="dbody"></div>
+        <button class="tobottom" id="toBottom" title="Jump to latest" type="button">&#8595;</button>
       </section>
     </div>
     <form class="composer" id="composer">
@@ -362,10 +396,10 @@ function renderDetail(){
   $("#dmeta").textContent = s ? [s.model?.id, s.agent].filter(Boolean).join(" · ") : "";
   const body=$("#dbody");
   if(view!=="chat"){ msgSession=""; msgKey=""; }
-  if(view==="new"){ body.innerHTML=newChatHtml(); return; }
-  if(view==="pets"){ body.innerHTML=petsHtml(); return; }
-  if(view==="settings"){ body.innerHTML=settingsHtml(); return; }
-  if(!s){ msgSession=""; body.innerHTML=`<div class="empty">pick a session, or press + for a new chat</div>`; return; }
+  if(view==="new"){ body.innerHTML=newChatHtml(); updateToBottom(); return; }
+  if(view==="pets"){ body.innerHTML=petsHtml(); updateToBottom(); return; }
+  if(view==="settings"){ body.innerHTML=settingsHtml(); updateToBottom(); return; }
+  if(!s){ msgSession=""; body.innerHTML=`<div class="empty">pick a session, or press + for a new chat</div>`; updateToBottom(); return; }
   // Only show the placeholder when the session actually changed. Re-rendering the
   // same chat must not replace it with "loading…" and then early-return.
   const sk=sessionKey(s);
@@ -379,6 +413,102 @@ function scheduleMessages(s){
   clearTimeout(msgTimer);
   msgTimer=setTimeout(()=>loadMessages(s),70);
 }
+function updateToBottom(){
+  const b=$("#dbody"), to=$("#toBottom");
+  if(!b||!to) return;
+  to.classList.toggle("on", b.scrollHeight-b.scrollTop-b.clientHeight>80);
+}
+function messageError(err){
+  if(!err) return "";
+  const type=err.type||"error";
+  const msg=err.message||err.data?.message||(typeof err==="string"?err:JSON.stringify(err));
+  const muted=/aborted|interrupt/i.test(type+" "+msg);
+  const short=msg.length>220?msg.slice(0,220)+"…":msg;
+  return `<div class="msg-error${muted?" muted":""}" title="${esc(msg)}">${esc(type)} · ${esc(short)}</div>`;
+}
+function renderPart(p,mid,i){
+  if(p.type==="tool"){
+    const status=String(p.status||"");
+    const input=p.input==null?"":(typeof p.input==="string"?p.input:JSON.stringify(p.input,null,2));
+    const output=String(p.output??"");
+    return `<details class="toolpart ${esc(status)}" data-k="${esc(mid)}:tool:${i}">`+
+      `<summary><span class="tname">${esc(p.name||"tool")}</span> <span class="tstatus">${esc(status)}</span></summary>`+
+      (input?`<div class="tlabel">input</div><pre>${esc(input.slice(0,8000))}</pre>`:"")+
+      (output?`<div class="tlabel">output</div><pre>${esc(output.slice(0,8000))}</pre>`:"")+
+      `</details>`;
+  }
+  if(p.type==="reasoning"||p.type==="system"){
+    const label=p.type==="reasoning"?"thinking":"system";
+    return `<div class="rpart"><div class="tlabel">${label}</div><div class="rmd">${CPMarkdown.toHtml(p.text||"")}</div></div>`;
+  }
+  if(p.type==="file") return `<div class="tlabel">file · ${esc(p.name||p.path||"file")}</div>`;
+  return "";
+}
+function messageTrace(m,mid){
+  const extras=(m.parts||[]).filter(p=>p.type!=="text");
+  if(!extras.length) return "";
+  const tools=extras.filter(p=>p.type==="tool");
+  const nThink=extras.filter(p=>p.type==="reasoning").length;
+  const nFile=extras.filter(p=>p.type==="file").length;
+  const nSys=extras.filter(p=>p.type==="system").length;
+  const bits=[];
+  if(tools.length) bits.push(`${tools.length} tool${tools.length>1?"s":""}`);
+  if(nThink) bits.push(`${nThink} thinking`);
+  if(nFile) bits.push(`${nFile} file${nFile>1?"s":""}`);
+  if(nSys) bits.push(`${nSys} system`);
+  const hasErr=tools.some(t=>/error|failed/i.test(String(t.status)));
+  return `<details class="trace" data-k="${esc(mid)}:trace">`+
+    `<summary class="${hasErr?"has-error":""}">${esc(bits.join(" · "))||"trace"}</summary>`+
+    `<div class="tracebody">${extras.map((p,i)=>renderPart(p,mid,i)).join("")}</div></details>`;
+}
+function renderMessage(m){
+  const mid=m.id||`m${Math.random().toString(36).slice(2)}`;
+  const text=(m.parts||[]).filter(p=>p.type==="text"&&p.text).map(p=>p.text).join("\n\n");
+  const role=m.role==="user"?"user":"assistant";
+  return `<div class="msg ${role}">${text?CPMarkdown.toHtml(text):""}${messageError(m.error)}${messageTrace(m,mid)}</div>`;
+}
+// Consecutive assistant steps with no answer text are one process run. Collapsing
+// them into a single trace keeps a turn readable: one "N steps · M tools" line
+// instead of one line per step.
+function renderRows(rows){
+  const groups=[];
+  let pending=null;
+  for(const m of rows){
+    const hasText=(m.parts||[]).some(p=>p.type==="text"&&p.text);
+    if(hasText){ pending=null; groups.push({kind:"msg",m}); }
+    else {
+      if(!pending){ pending={kind:"proc",msgs:[]}; groups.push(pending); }
+      pending.msgs.push(m);
+    }
+  }
+  return groups.map(g=>g.kind==="msg"?renderMessage(g.m):renderProcess(g.msgs)).join("");
+}
+function renderProcess(msgs){
+  const key=`process:${msgs[0]?.id||"p"}`;
+  const parts=msgs.flatMap(m=>m.parts||[]);
+  const tools=parts.filter(p=>p.type==="tool");
+  const nThink=parts.filter(p=>p.type==="reasoning").length;
+  const nFile=parts.filter(p=>p.type==="file").length;
+  const nSys=parts.filter(p=>p.type==="system").length;
+  const errs=[], seen=new Set();
+  for(const m of msgs){
+    const e=m.error; if(!e) continue;
+    const k=`${e.type}|${e.message}`; if(seen.has(k)) continue;
+    seen.add(k); errs.push(e);
+  }
+  const bits=[`${msgs.length} step${msgs.length>1?"s":""}`];
+  if(tools.length) bits.push(`${tools.length} tool${tools.length>1?"s":""}`);
+  if(nThink) bits.push(`${nThink} thinking`);
+  if(nFile) bits.push(`${nFile} file${nFile>1?"s":""}`);
+  if(nSys) bits.push(`${nSys} system`);
+  const hasErr=errs.length||tools.some(t=>/error|failed/i.test(String(t.status)));
+  const trace=parts.length
+    ? `<details class="trace" data-k="${esc(key)}:trace"><summary class="${hasErr?"has-error":""}">`+
+      `${esc(bits.join(" · "))}</summary><div class="tracebody">`+
+      `${parts.map((p,i)=>renderPart(p,key,i)).join("")}</div></details>`
+    : "";
+  return `<div class="msg assistant process">${errs.map(messageError).join("")}${trace}</div>`;
+}
 async function loadMessages(s){
   if(!s) return;
   const sk=sessionKey(s);
@@ -386,23 +516,36 @@ async function loadMessages(s){
   try{
     const msgs=await (await fetch(`/api/messages?server=${encodeURIComponent(s.server)}&sessionId=${encodeURIComponent(s.id)}&limit=30`)).json();
     if(seq!==msgSeq||msgSession!==sk) return; // a newer session/load won
-    const rows=(msgs||[]).map(m=>({m,t:(m.parts||[]).map(p=>p.text).join("\n").trim()})).filter(x=>x.t);
-    const key=JSON.stringify(rows.map(r=>r.t));
-    if(key===msgKey) return; // already on screen
+    const rows=(msgs||[]).filter(m=>(m.parts&&m.parts.length)||m.error);
+    const key=JSON.stringify(rows.map(m=>[m.id,m.error,m.parts]));
+    if(key===msgKey){ updateToBottom(); return; } // already on screen
     msgKey=key;
     const body=$("#dbody");
     const atBottom=body.scrollHeight-body.scrollTop-body.clientHeight<40;
-    body.innerHTML=rows.map(({m,t})=>
-      `<div class="msg ${m.role==="user"?"user":"assistant"}">${CPMarkdown.toHtml(t)}</div>`).join("")
-      ||`<div class="empty">no messages yet</div>`;
+    const open=new Set([...body.querySelectorAll("details[open][data-k]")].map(d=>d.dataset.k));
+    body.innerHTML=renderRows(rows)||`<div class="empty">no messages yet</div>`;
+    // keep expanded traces/tools expanded across streaming updates
+    for(const k of open){
+      const d=[...body.querySelectorAll("details[data-k]")].find(x=>x.dataset.k===k);
+      if(d) d.open=true;
+    }
     if(atBottom) body.scrollTop=body.scrollHeight;
+    updateToBottom();
   }catch(e){
     if(seq===msgSeq&&msgSession===sk){
       msgKey=""; // let the next poll retry and repaint after a transient failure
       $("#dbody").innerHTML=`<div class="empty">${esc(e)}</div>`;
+      updateToBottom();
     }
   }
 }
+$("#dbody").addEventListener("scroll",updateToBottom,{passive:true});
+$("#dbody").addEventListener("click",e=>{ if(e.target.closest("summary")) setTimeout(updateToBottom,0); });
+$("#toBottom").addEventListener("click",()=>{
+  const b=$("#dbody");
+  b.scrollTop=b.scrollHeight;
+  updateToBottom();
+});
 function newChatHtml(){
   const opts=workspaces.slice(0,8).map(w=>`<option value="${esc(w.directory)}">${esc(w.dirName)} — ${esc(w.directory)}</option>`).join("");
   return `<div class="field"><label>Prompt</label>
