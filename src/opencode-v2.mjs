@@ -73,6 +73,14 @@ export class OpenCodeV2Client {
       model: s.model,
       tokens: s.tokens,
       cost: s.cost,
+      time: s.time
+        ? {
+            created: s.time.created ?? null,
+            updated: s.time.updated ?? null,
+            busy: s.time.busy ?? null,
+            idle: s.time.idle ?? null,
+          }
+        : null,
     };
   }
 
@@ -98,11 +106,104 @@ export class OpenCodeV2Client {
     }));
   }
 
+  // Pending agent questions. v2 scopes these to a location: passing a session's
+  // directory returns the forms of every session in it, which is cheaper than one
+  // request per session.
+  async forms(directory = null) {
+    const query = directory ? `?location[directory]=${enc(directory)}` : "";
+    const out = await this.#req(`/api/form${query}`);
+    return (out?.data ?? []).map((f) => ({
+      id: f.id,
+      sessionID: f.sessionID,
+      title: f.title ?? "",
+      fields: f.fields ?? [],
+      metadata: f.metadata ?? null,
+    }));
+  }
+
+  replyForm(sessionId, formId, answer) {
+    return this.#req(`/api/session/${enc(sessionId)}/form/${enc(formId)}/reply`, {
+      method: "POST",
+      body: JSON.stringify({ answer: answer ?? {} }),
+    });
+  }
+
+  // Durable inputs waiting to be delivered. Switching to the plan agent enqueues
+  // a synthetic "you are in Plan mode" steer message; seeing it lets the brain
+  // join the first prompt to that same turn instead of queueing an empty one.
+  async inbox(sessionId) {
+    const out = await this.#req(`/api/session/${enc(sessionId)}/inbox`);
+    return out?.data ?? [];
+  }
+
+  // Fetch one page of messages. v2 pages with an opaque cursor; pages are
+  // returned from oldest to newest so the face can prepend older pages without
+  // reversing everything again.
+  async messagePage(id, { limit = 20, order = "desc", type = null, cursor = null, compact = false, lookahead = false } = {}) {
+    // Ask for one extra message so the caller can tell whether another page
+    // actually exists. v2 returns a cursor even on the last page, so cursor
+    // presence alone would show a bogus "earlier messages" divider.
+    const requestLimit = lookahead ? limit + 1 : limit;
+    const qs = new URLSearchParams({ limit: String(requestLimit) });
+    if (type) qs.set("type", type);
+    if (cursor) qs.set("cursor", cursor);
+    else qs.set("order", order === "asc" ? "asc" : "desc");
+    const out = await this.#req(`/api/session/${enc(id)}/message?${qs.toString()}`);
+    const raw = out?.data ?? [];
+    const rows = this.#normalizeRows(raw, { compact });
+    rows.sort((a, b) => (a.info.time?.created ?? 0) - (b.info.time?.created ?? 0));
+    const hasMore = lookahead ? raw.length > limit : Boolean(out?.cursor);
+    return {
+      messages: rows,
+      cursor: hasMore ? out?.cursor ?? null : null,
+      hasMore,
+    };
+  }
+
   async messages(id, limit = 20) {
-    const out = await this.#req(`/api/session/${enc(id)}/message`);
-    // v2 returns newest-first and puts user text at the top level
-    const all = [...(out?.data ?? [])].reverse();
-    const rows = all.slice(-limit);
+    const page = await this.messagePage(id, { limit, order: "desc" });
+    return page.messages;
+  }
+
+  #normalizeRows(rows, { compact = false } = {}) {
+    const clip = (s, n) => {
+      const text = String(s ?? "");
+      return text.length > n ? text.slice(0, n) + "\n…" : text;
+    };
+    const toolOutput = (st) => {
+      let o = st?.content;
+      if (Array.isArray(o)) o = o.filter((x) => x?.type === "text" && x.text).map((x) => x.text).join("\n");
+      else if (o && typeof o === "object") o = JSON.stringify(o, null, 2);
+      if (st?.error) o = [String(st.error), o || ""].filter(Boolean).join("\n\n");
+      o = o || "";
+      return compact ? clip(o, 4000) : o;
+    };
+    const partsOf = (m) => {
+      const parts = [];
+      if (m.type === "user") {
+        const text = m.text ?? m.payload?.text;
+        if (text) parts.push({ type: "text", text });
+        for (const f of m.files ?? []) {
+          parts.push({ type: "file", name: f?.name || f?.path || String(f), path: f?.path ?? null });
+        }
+      } else if (m.type === "assistant") {
+        for (const c of m.content ?? []) {
+          if (c.type === "text" && c.text) parts.push({ type: "text", text: compact ? clip(c.text, 8000) : c.text });
+          else if (c.type === "reasoning" && c.text) parts.push({ type: "reasoning", text: compact ? clip(c.text, 4000) : c.text });
+          else if (c.type === "tool") {
+            const st = c.state ?? {};
+            parts.push({
+              type: "tool",
+              name: c.name || "tool",
+              status: st.status || "unknown",
+              input: st.input ?? null,
+              output: toolOutput(st),
+            });
+          }
+        }
+      }
+      return parts;
+    };
     return rows.map((m) => ({
       info: {
         id: m.id,
@@ -110,12 +211,23 @@ export class OpenCodeV2Client {
         time: { created: m.time?.created ?? null },
         tokens: m.tokens ?? null,
         cost: m.cost ?? null,
+        error: m.error ?? null,
       },
-      parts: (m.type === "user"
-        ? [{ type: "text", text: m.text ?? m.payload?.text ?? "" }]
-        : (m.content ?? []).filter((p) => p.type === "text" && p.text).map((p) => ({ type: "text", text: p.text }))
-      ).filter((p) => p.text),
-    }));
+      parts: partsOf(m),
+    })).filter((m) => m.parts.length || m.info.error);
+  }
+
+  getSession(id) {
+    return this.#req(`/api/session/${enc(id)}`).then((out) => OpenCodeV2Client.mapSession(out?.data));
+  }
+  // A fork copies history up to `before` (null = the full history). The response
+  // carries the new session, including the "… (fork #N)" title.
+  forkSession(id, before = null) {
+    return this.#req(`/api/session/${enc(id)}/fork`, { method: "POST", body: JSON.stringify({ before }) })
+      .then((out) => OpenCodeV2Client.mapSession(out?.data));
+  }
+  setTitle(id, title) {
+    return this.#req(`/api/session/${enc(id)}`, { method: "PATCH", body: JSON.stringify({ title }) });
   }
 
   async createSession(body = {}) {
@@ -123,8 +235,17 @@ export class OpenCodeV2Client {
     if (body.title) payload.title = body.title;
     if (body.agent) payload.agent = body.agent;
     if (body.model) payload.model = body.model;
+    if (body.location) payload.location = body.location;
     const out = await this.#req("/api/session", { method: "POST", body: JSON.stringify(payload) });
     return OpenCodeV2Client.mapSession(out?.data);
+  }
+  // v2 moves a session between project directories; the server accepts the path
+  // and the next tool call resolves it, so the face validates the host path.
+  moveSession(id, directory) {
+    return this.#req(`/api/session/${enc(id)}/move`, {
+      method: "POST",
+      body: JSON.stringify({ directory }),
+    });
   }
 
   // v2 prompts are queued; "steer" (the default) is dropped when no turn is running.
@@ -194,8 +315,8 @@ export class OpenCodeV2Client {
     return out?.data ?? [];
   }
 
-  setModel() { throw new Error("model switching is not implemented for OpenCode 2"); }
-  setAgent() { throw new Error("agent switching is not implemented for OpenCode 2"); }
+  setModel(id, ref) { return this.post(`/api/session/${enc(id)}/model`, { model: ref }); }
+  setAgent(id, agent) { return this.post(`/api/session/${enc(id)}/agent`, { agent }); }
   summarize() { throw new Error("summarize is not implemented for OpenCode 2"); }
   share() { throw new Error("share is not implemented for OpenCode 2"); }
   unshare() { throw new Error("share is not implemented for OpenCode 2"); }
@@ -213,12 +334,49 @@ export class OpenCodeV2Client {
     const dec = new TextDecoder();
     let buf = "";
 
+    // Live "what is happening" state, kept out of the message store: reasoning
+    // deltas can be very frequent, so the preview is throttled; tool events are
+    // emitted as they arrive.
+    const toolNames = new Map(); // call id -> tool name
+    const reasoningText = new Map(); // session id -> rolling tail
+    const reasoningAt = new Map();
+    const clip = (s, n) => {
+      const text = String(s ?? "").replace(/\s+/g, " ").trim();
+      return text.length > n ? text.slice(0, n) + "…" : text;
+    };
+    const toolHint = (input) => {
+      if (input == null) return "";
+      if (typeof input === "string") return clip(input, 120);
+      if (typeof input === "object") {
+        for (const key of ["command", "filePath", "path", "pattern", "query", "description", "url", "prompt"]) {
+          if (typeof input[key] === "string" && input[key]) return clip(input[key], 120);
+        }
+      }
+      try { return clip(JSON.stringify(input), 120); } catch { return ""; }
+    };
+    const activity = (sessionID, value) =>
+      onEvent({ type: "session.activity", properties: { sessionID, activity: value } });
+
     const emit = (wrapper) => {
       const d = wrapper.data ?? {};
       const sid = d.sessionID;
       switch (wrapper.type) {
         case "session.created":
           return onEvent({ type: "session.created", properties: { info: OpenCodeV2Client.mapSession(d) } });
+        case "session.deleted":
+          return onEvent({ type: "session.deleted", properties: { sessionID: sid } });
+        // v2 announces a fork with only its id and parent, not its info. Fetch the
+        // session so its title ("… (fork #N)") reaches the pet immediately instead
+        // of waiting for a full sync (the store used to show it as "(untitled)").
+        case "session.forked": {
+          const id = d.sessionID;
+          if (id) {
+            void this.getSession(id)
+              .then((info) => { if (info) onEvent({ type: "session.created", properties: { info } }); })
+              .catch(() => {});
+          }
+          return;
+        }
         case "session.renamed":
           return onEvent({ type: "session.updated", properties: { info: { id: sid, title: d.title } } });
         case "session.usage.updated":
@@ -232,12 +390,54 @@ export class OpenCodeV2Client {
           return onEvent({ type: "session.idle", properties: { sessionID: sid } });
         case "session.execution.failed":
           return onEvent({ type: "session.error", properties: { sessionID: sid, error: { message: "execution failed" } } });
+        case "session.reasoning.started":
+          reasoningText.set(sid, "");
+          return activity(sid, { kind: "thinking", text: "", status: "started" });
+        case "session.reasoning.delta": {
+          const text = (reasoningText.get(sid) ?? "") + (d.delta ?? "");
+          const tail = text.slice(-400);
+          reasoningText.set(sid, tail);
+          const now = Date.now();
+          if (now - (reasoningAt.get(sid) ?? 0) < 250) return;
+          reasoningAt.set(sid, now);
+          return activity(sid, { kind: "thinking", text: tail, status: "streaming" });
+        }
+        case "session.reasoning.ended": {
+          const tail = String(d.text ?? reasoningText.get(sid) ?? "").slice(-400);
+          reasoningText.set(sid, tail);
+          reasoningAt.delete(sid);
+          return activity(sid, { kind: "thinking", text: tail, status: "completed" });
+        }
+        case "session.tool.input.started":
+          if (d.id) toolNames.set(d.id, d.name || "tool");
+          return activity(sid, { kind: "tool", tool: d.name || "tool", status: "input", callID: d.id ?? null });
+        case "session.tool.called": {
+          const name = toolNames.get(d.id) || "tool";
+          return activity(sid, { kind: "tool", tool: name, status: "running", detail: toolHint(d.input), callID: d.id ?? null });
+        }
+        case "session.tool.success": {
+          const name = toolNames.get(d.id) || "tool";
+          if (d.id) toolNames.delete(d.id);
+          return activity(sid, { kind: "tool", tool: name, status: "completed", callID: d.id ?? null });
+        }
+        case "session.tool.failed":
+        case "session.tool.error":
+        case "session.tool.cancelled": {
+          const name = toolNames.get(d.id) || "tool";
+          if (d.id) toolNames.delete(d.id);
+          return activity(sid, { kind: "tool", tool: name, status: "error", callID: d.id ?? null });
+        }
         case "session.text.delta":
           return onEvent({ type: "message.part.delta", properties: { sessionID: sid, delta: d.delta ?? "" } });
         case "session.text.ended":
           return onEvent({ type: "message.part.updated", properties: { part: { sessionID: sid, type: "text", text: d.text ?? "" } } });
         case "session.status":
           return onEvent({ type: "session.status", properties: { sessionID: sid, status: d.status ?? { type: "idle" } } });
+        case "form.created":
+          return onEvent({ type: "form.created", properties: { form: d.form } });
+        case "form.replied":
+        case "form.cancelled":
+          return onEvent({ type: wrapper.type, properties: { id: d.id, sessionID: d.sessionID } });
         default:
           return undefined;
       }

@@ -39,6 +39,56 @@ async function waitForHealth(url, timeoutMs = 20000) {
 }
 const LOG_FILE = path.join(os.homedir(), ".cute-pets", "brain.log");
 const HIDDEN_FILE = path.join(os.homedir(), ".cute-pets", "hidden.json");
+
+// ---- directories ---------------------------------------------------------
+// v2 sessions can be created/moved at any directory the server's host can see;
+// the server itself does not stat the path up front. Validate on the brain host
+// (or through its WSL UNC mount) so /cd fails before a turn is started.
+function isRemoteUrl(url) {
+  try {
+    const host = new URL(url).hostname;
+    return !["127.0.0.1", "localhost", "::1", "[::1]"].includes(host);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeDir(dir, entry) {
+  let value = String(dir || "").trim();
+  if (!value) throw new Error("directory required");
+  const home = entry?.workdir || os.homedir();
+  if (value === "~") value = home;
+  else if (value.startsWith("~/") || value.startsWith("~\\")) value = home.replace(/[\\/]+$/, "") + value.slice(1);
+  if (!/^([a-zA-Z]:[\\/]|\\\\|\/)/.test(value)) throw new Error(`use an absolute path: ${value}`);
+  value = /^[a-zA-Z]:[\\/]/.test(value) ? path.win32.normalize(value) : path.posix.normalize(value);
+  return value;
+}
+
+function hostPath(dir, entry) {
+  if (entry?.distro) {
+    // a WSL server only understands POSIX paths; map them through its UNC share
+    return dir.startsWith("/") ? `//wsl.localhost/${entry.distro}${dir}` : null;
+  }
+  if (process.platform === "win32" && dir.startsWith("/")) return null; // local Windows server
+  return dir;
+}
+
+function modelRef(model) {
+  if (!model) return null;
+  return { id: model.id, providerID: model.providerID, variant: model.variant ?? "default" };
+}
+
+// The normalized shape faces consume.
+function faceMessage(m) {
+  return {
+    id: m.info?.id,
+    role: m.info?.role ?? "unknown",
+    time: m.info?.time?.created ?? null,
+    tokens: m.info?.tokens ?? null,
+    error: m.info?.error ?? null,
+    parts: m.parts ?? [],
+  };
+}
 const log = (...a) => {
   const line = `[${new Date().toISOString()}] ${a.join(" ")}`;
   console.log(line);
@@ -152,7 +202,7 @@ class Hub {
     return online[0].client.baseUrl;
   }
 
-  async attach(url, { directory = null, password = null } = {}) {
+  async attach(url, { directory = null, password = null, distro = null } = {}) {
     const clean = String(url).replace(/\/+$/, "");
     const existing = this.clients.get(clean);
     if (existing) {
@@ -185,14 +235,14 @@ class Hub {
     } catch {}
     this.store.addServer(clean, { directory: workdir });
     this.store.setServerOnline(clean, true);
-    const entry = { client, controller: null, attempts: 0, workdir, password: creds };
+    const entry = { client, controller: null, attempts: 0, workdir, password: creds, distro };
     this.clients.set(clean, entry);
     log(`attached ${clean} (opencode ${health?.version ?? "?"})`);
     try {
       if (creds) this.credentials.set(clean, creds);
       const cfg = readConfig();
       const list = (cfg.servers ?? []).filter((e) => (typeof e === "string" ? e : e.url) !== clean);
-      list.push(creds ? { url: clean, password: creds } : clean);
+      list.push(creds ? { url: clean, password: creds, ...(distro ? { distro } : {}) } : clean);
       writeConfig({ servers: list });
     } catch {}
     await this.sync(clean);
@@ -216,12 +266,16 @@ class Hub {
     try { wsl = wslServices(); } catch (e) { log("wsl scan failed:", e.message); }
     if (wsl.length && !this.wslLogged) { this.wslLogged = true; log(`WSL services found: ${wsl.map((w) => w.url).join(", ")}`); }
     for (const entry of wsl) {
-      if (this.clients.has(entry.url)) continue;
+      const existing = this.clients.get(entry.url);
+      if (existing) {
+        if (!existing.distro && entry.distro) existing.distro = entry.distro;
+        continue;
+      }
       const last = this.wslTried.get(entry.url) ?? 0;
       if (Date.now() - last < 60_000) continue;
       this.wslTried.set(entry.url, Date.now());
       try {
-        const client = await this.attach(entry.url, { password: entry.password });
+        const client = await this.attach(entry.url, { password: entry.password, distro: entry.distro });
         if (client) {
           attached.push(entry.url);
           log(`attached WSL service ${entry.url} (${entry.distro})`);
@@ -273,16 +327,32 @@ class Hub {
     const entry = this.clients.get(url);
     if (!entry) return;
     const { client } = entry;
-    const [sessions, statuses, permissions] = await Promise.all([
-      client.listSessions().catch(() => []),
+    // Keep "listing failed" distinct from "the server has no sessions": only an
+    // authoritative list may prune records.
+    let sessions = null;
+    try { sessions = await client.listSessions(); } catch {}
+    const [statuses, permissions] = await Promise.all([
       client.statuses().catch(() => ({})),
       client.permissions().catch(() => []),
     ]);
-    for (const info of sessions ?? []) this.store.upsertSession(url, info);
-    for (const info of sessions ?? []) {
-      if (statuses?.[info.id]) this.store.setStatus(url, info.id, statuses[info.id]);
+    if (Array.isArray(sessions)) {
+      for (const info of sessions) this.store.upsertSession(url, info);
+      for (const info of sessions) {
+        if (statuses?.[info.id]) this.store.setStatus(url, info.id, statuses[info.id]);
+      }
+      this.store.reconcileSessions(url, sessions.map((s) => s.id));
     }
     this.store.replacePermissions(url, permissions ?? []);
+    if (typeof client.forms === "function") {
+      // Forms are scoped to a location, so one request per known directory (not
+      // per session). v2 usually serves a single directory, so this is one call.
+      const dirs = [...new Set((sessions ?? []).map((s) => s.directory).filter(Boolean))];
+      if (!dirs.length) dirs.push(null);
+      const lists = await Promise.all(dirs.map((dir) => client.forms(dir).catch(() => [])));
+      const byId = new Map();
+      for (const list of lists) for (const form of list ?? []) if (form?.id) byId.set(form.id, form);
+      this.store.replaceForms(url, [...byId.values()]);
+    }
   }
 
   #refreshPermissions(url) {
@@ -326,6 +396,28 @@ class Hub {
         break;
       case "message.part.delta":
         if (p.sessionID) this.store.noteDelta(url, p.sessionID, p.delta);
+        break;
+      case "session.activity":
+        if (p.sessionID && p.activity) this.store.noteActivity(url, p.sessionID, p.activity);
+        break;
+      case "form.created":
+        if (p.form?.id && p.form?.sessionID) {
+          this.store.upsertSession(url, { id: p.form.sessionID });
+          this.store.upsertForm(url, p.form);
+          // A form can arrive for a session the store has only seen by id (or not
+          // at all); fetch its title/agent so the card is coloured correctly.
+          const entry = this.clients.get(url);
+          if (entry?.client?.getSession) {
+            void entry.client
+              .getSession(p.form.sessionID)
+              .then((info) => { if (info) this.store.upsertSession(url, info); })
+              .catch(() => {});
+          }
+        }
+        break;
+      case "form.replied":
+      case "form.cancelled":
+        if (p.id) this.store.removeForm(p.id);
         break;
       default:
         if (typeof ev?.type === "string" && ev.type.startsWith("permission.")) {
@@ -386,6 +478,78 @@ class Hub {
     return [...byDir.values()].sort((a, b) => b.sessions - a.sessions);
   }
 
+  // Resolve a user-supplied directory on the brain host (or its WSL mount) and
+  // return the absolute path. Remote servers cannot be checked locally, so their
+  // paths are passed through.
+  hostDirectory(directory, entry) {
+    const dir = normalizeDir(directory, entry);
+    if (isRemoteUrl(entry.client.baseUrl)) return dir;
+    const hp = hostPath(dir, entry);
+    if (!hp) throw new Error(`"${dir}" is a Linux path; attach the WSL server that owns it`);
+    if (!fs.existsSync(hp) || !fs.statSync(hp).isDirectory()) throw new Error(`not a directory: ${dir}`);
+    return dir;
+  }
+
+  defaults() {
+    const cfg = readConfig();
+    const first = this.list()[0];
+    return {
+      directory: cfg.lastDirectory || first?.workdir || os.homedir(),
+      server: first?.client.baseUrl ?? null,
+      model: cfg.lastModel ?? null,
+      agent: cfg.lastAgent ?? null,
+    };
+  }
+
+  // Validate a directory before a draft starts or a session moves. v2 only: v1
+  // servers are bound to one cwd and need a server per directory.
+  checkdir({ directory, server } = {}) {
+    if (!directory) throw new Error("directory required");
+    const candidates = [];
+    if (server && this.clients.has(server)) candidates.push(server);
+    for (const entry of this.list()) if (!candidates.includes(entry.client.baseUrl)) candidates.push(entry.client.baseUrl);
+    let lastError = null;
+    for (const url of candidates) {
+      const entry = this.clients.get(url);
+      if (!entry?.client.online || entry.client.version !== "2") continue;
+      try {
+        return { ok: true, directory: this.hostDirectory(directory, entry), server: url, wsl: Boolean(entry.distro) };
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    if (lastError) throw lastError;
+    throw new Error("no OpenCode 2 server attached");
+  }
+
+  // Pick the server a new session at `directory` belongs to. For v2 any attached
+  // server can host a location; prefer the one the face was using, then the rest.
+  // v1 falls back to the old server-per-directory spawn.
+  async resolveDirectory(directory, preferred) {
+    const dir = String(directory || "").trim();
+    if (!dir) return null;
+    const candidates = [];
+    const push = (url) => {
+      if (url && this.clients.has(url) && !candidates.includes(url)) candidates.push(url);
+    };
+    push(preferred);
+    for (const entry of this.list()) push(entry.client.baseUrl);
+    let lastError = null;
+    let sawV2 = false;
+    for (const url of candidates) {
+      const entry = this.clients.get(url);
+      if (!entry?.client.online || entry.client.version !== "2") continue;
+      sawV2 = true;
+      try {
+        return { server: url, directory: this.hostDirectory(dir, entry) };
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    if (sawV2) throw lastError || new Error(`no OpenCode 2 server can use ${dir}`);
+    return await this.ensureWorkspace(dir);
+  }
+
   async models({ server }) {
     const url = this.pickServer(server);
     const entry = url && this.clients.get(url);
@@ -424,20 +588,39 @@ class Hub {
     const client = entry.client;
     const rec = this.store.sessions.get(`${url}::${sessionId}`);
     const refresh = async () => {
-      try { this.store.upsertSession(url, await client.get(`/session/${sessionId}`)); } catch {}
+      try {
+        const info = typeof client.getSession === "function"
+          ? await client.getSession(sessionId)
+          : await client.get(`/session/${sessionId}`);
+        if (info) this.store.upsertSession(url, info);
+      } catch {}
     };
 
     switch (action) {
-      case "model":
+      case "model": {
         if (!value?.id || !value?.providerID) throw new Error("model id and providerID required");
-        await client.setModel(sessionId, { id: value.id, providerID: value.providerID, variant: value.variant ?? "default" });
+        const ref = modelRef(value);
+        await client.setModel(sessionId, ref);
         await refresh();
-        return { ok: true, model: value };
+        writeConfig({ lastModel: ref });
+        return { ok: true, model: ref };
+      }
       case "agent":
         if (!value) throw new Error("agent required");
         await client.setAgent(sessionId, value);
         await refresh();
+        writeConfig({ lastAgent: value });
         return { ok: true, agent: value };
+      case "move": {
+        if (!value?.directory) throw new Error("directory required");
+        if (typeof client.moveSession !== "function") throw new Error("moving sessions needs OpenCode 2");
+        const dir = this.hostDirectory(value.directory, entry);
+        await client.moveSession(sessionId, dir);
+        await refresh();
+        writeConfig({ lastDirectory: dir });
+        const session = this.store.snapshot().sessions.find((s) => s.id === sessionId) ?? null;
+        return { ok: true, directory: dir, session };
+      }
       case "compact": {
         const model = rec?.model;
         if (!model?.id || !model?.providerID) throw new Error("session has no model to summarize with");
@@ -461,6 +644,22 @@ class Hub {
       case "redo":
         await client.unrevert(sessionId);
         return { ok: true };
+      case "fork": {
+        const out = await client.forkSession(sessionId);
+        const info = out?.data ?? out;
+        if (!info?.id) throw new Error("fork returned no session");
+        // v2 titles forks itself ("… (fork #N)"); if a server does not, keep the
+        // pet readable and avoid "(untitled)" for the child session.
+        let title = info.title || "";
+        if (!title) {
+          title = `${rec?.title || "session"} (fork)`;
+          try { await client.setTitle(info.id, title); } catch {}
+          info.title = title;
+        }
+        this.store.upsertSession(url, info);
+        const session = this.store.snapshot().sessions.find((s) => s.id === info.id) ?? null;
+        return { ok: true, sessionId: info.id, title, session };
+      }
       default:
         throw new Error(`unknown action: ${action}`);
     }
@@ -473,14 +672,16 @@ class Hub {
     return entry.client.commands();
   }
 
-  async prompt({ server, sessionId, newSession, title, text, command, directory }) {
-    // A new chat in an explicit folder must land in THAT folder's server, not the
-    // default one. ensureWorkspace reuses an attached server for the directory or
-    // spawns one (and refuses Linux paths on Windows).
+  async prompt({ server, sessionId, newSession, title, text, command, directory, model, agent }) {
+    // A new chat with an explicit directory: v2 servers host any location, so use
+    // one of them instead of spawning a server per folder. v1 falls back to the
+    // old server-per-directory behaviour inside resolveDirectory.
     let url = null;
-    if (!sessionId && !server && directory) {
-      const ws = await this.ensureWorkspace(directory);
-      url = ws.server;
+    let dir = null;
+    if (!sessionId && directory) {
+      const loc = await this.resolveDirectory(directory, server);
+      url = loc.server;
+      dir = loc.directory;
     } else {
       url = this.pickServer(server);
     }
@@ -493,11 +694,36 @@ class Hub {
     const { client } = entry;
     let id = sessionId;
     if (!id || newSession) {
-      const sess = await client.createSession(title ? { title } : {});
+      const opts = {};
+      if (title) opts.title = title;
+      if (agent) opts.agent = agent;
+      if (model) opts.model = modelRef(model);
+      if (dir && client.version === "2") opts.location = { directory: dir };
+      const sess = await client.createSession(opts);
       id = sess.id;
       this.store.upsertSession(url, sess);
+      const lastDirectory = dir || sess.directory || readConfig().lastDirectory;
+      if (lastDirectory) {
+        const patch = { lastDirectory };
+        if (model) patch.lastModel = modelRef(model);
+        if (agent) patch.lastAgent = agent;
+        writeConfig(patch);
+      }
     }
-    const rec = this.store.sessions.get(`${url}::${id}`);
+    let rec = this.store.sessions.get(`${url}::${id}`);
+    const wasRunning = rec?.state === STATE.RUNNING;
+    let sessionAgent = agent ?? rec?.agent ?? null;
+    // A session switched to plan by another client may still look agent-less in
+    // our store; ask once so the next prompt can join its plan-mode turn.
+    if (!sessionAgent && client.version === "2" && typeof client.getSession === "function") {
+      const info = await client.getSession(id).catch(() => null);
+      if (info) {
+        this.store.upsertSession(url, info);
+        sessionAgent = info.agent ?? null;
+        rec = this.store.sessions.get(`${url}::${id}`);
+      }
+    }
+    const isPlan = sessionAgent === "plan";
     if (rec) {
       rec.state = STATE.RUNNING;
       rec.updatedAt = Date.now();
@@ -509,9 +735,22 @@ class Hub {
         .command(id, { command, args: text ?? "" })
         .catch((err) => log(`command ${command} failed: ${err.message ?? err}`));
     } else {
-      await client.prompt(id, text);
+      // Plan mode starts its own synthetic turn as soon as the session is created
+      // or switched to the plan agent. Queueing the first prompt would answer that
+      // synthetic reminder ("there is no request") before the user's message.
+      // Steering it into the same turn avoids the empty round-trip.
+      let extra = null;
+      if (client.version === "2" && isPlan) {
+        const pending = typeof client.inbox === "function"
+          ? await client.inbox(id).catch(() => [])
+          : [];
+        const planReminder = pending.some((item) => item.type === "synthetic" && item.delivery === "steer");
+        if (wasRunning || planReminder) extra = { delivery: "steer" };
+      }
+      await client.prompt(id, text, extra ?? undefined);
     }
-    return { server: url, sessionId: id };
+    const session = this.store.snapshot().sessions.find((s) => s.id === id) ?? null;
+    return { server: url, sessionId: id, session };
   }
 
   // Destructive: removes the session in OpenCode. Not wired to any UI control.
@@ -544,20 +783,42 @@ class Hub {
     return { ok: true };
   }
 
+  async replyForm({ server, sessionId, formId, answer }) {
+    const found = this.store.forms.get(formId);
+    const url = found ? found[0].split("::")[0] : this.pickServer(server);
+    const entry = url && this.clients.get(url);
+    if (!entry || !sessionId || !formId) throw new Error("server, sessionId and formId required");
+    if (typeof entry.client.replyForm !== "function") throw new Error("forms need OpenCode 2");
+    await entry.client.replyForm(sessionId, formId, answer);
+    this.store.removeForm(formId);
+    return { ok: true };
+  }
+
   async messages({ server, sessionId, limit = 20 }) {
     const url = this.pickServer(server);
     const entry = url && this.clients.get(url);
     if (!entry || !sessionId) throw new Error("server and sessionId required");
     const raw = await entry.client.messages(sessionId, limit);
-    return (raw ?? []).map((m) => ({
-      id: m.info?.id,
-      role: m.info?.role ?? "unknown",
-      time: m.info?.time?.created ?? null,
-      tokens: m.info?.tokens ?? null,
-      parts: (m.parts ?? [])
-        .filter((p) => p.type === "text" && p.text)
-        .map((p) => ({ type: p.type, text: p.text })),
-    }));
+    // The clients normalize text, reasoning, tool and file parts; the face decides
+    // which of them to show collapsed (tool calls, thinking, errors).
+    return (raw ?? []).map(faceMessage);
+  }
+
+  async messagePage({ server, sessionId, limit = 40, order = "desc", type = null, cursor = null, compact = false }) {
+    const url = this.pickServer(server);
+    const entry = url && this.clients.get(url);
+    if (!entry || !sessionId) throw new Error("server and sessionId required");
+    if (typeof entry.client.messagePage === "function") {
+      const page = await entry.client.messagePage(sessionId, { limit, order, type, cursor, compact, lookahead: true });
+      return {
+        messages: (page.messages ?? []).map(faceMessage),
+        cursor: page.cursor ?? null,
+        hasMore: Boolean(page.hasMore),
+      };
+    }
+    // v1 has no cursor or type filter; return the newest page and no pagination.
+    const raw = await entry.client.messages(sessionId, limit);
+    return { messages: (raw ?? []).map(faceMessage), cursor: null, hasMore: false };
   }
 
   async close() {
@@ -608,10 +869,16 @@ for (const entry of args.servers) await hub.attach(entry.url, { password: entry.
 for (const entry of readConfig().servers ?? []) {
   const url = typeof entry === "string" ? entry : entry.url;
   const password = typeof entry === "string" ? null : entry.password ?? null;
-  if (url && !args.servers.includes(url)) await hub.attach(url, { password }).catch(() => {});
+  const distro = typeof entry === "string" ? null : entry.distro ?? null;
+  if (url && !args.servers.includes(url)) await hub.attach(url, { password, distro }).catch(() => {});
 }
 await hub.discover();
 setInterval(() => { void hub.discover(); }, 10_000);
+// Titles (forks, generated names) and metadata can change without an event we
+// translate; a cheap refresh keeps the pet from showing stale "(untitled)" rows.
+setInterval(() => {
+  for (const entry of hub.list()) void hub.sync(entry.client.baseUrl).catch(() => {});
+}, 30_000);
 log("scanning for opencode servers every 10s");
 
 process.on("SIGINT", async () => {

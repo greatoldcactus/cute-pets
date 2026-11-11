@@ -3,5 +3,6 @@
   "displayName": "Chibi Knight",
   "description": "A watchful brown-haired knight girl in crimson armour with a red plume, round shield and short sword.",
   "spriteVersionNumber": 2,
-  "spritesheetPath": "spritesheet.webp"
+  "spritesheetPath": "spritesheet.webp",
+  "rows": { "idle": 0, "running": 2, "waiting": 6, "error": 9, "plan": 8 }
 }

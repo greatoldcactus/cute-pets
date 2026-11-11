@@ -22,14 +22,18 @@ of a local HTTP server — so a pet can be an equal peer instead of a notificati
 
 ```
 opencode serve ──HTTP + SSE──▶ brain (src/) ──HTTP + SSE──▶ faces
-      ▲                            │                        ├─ faces/web     (exists)
-      └──── plugin announce ───────┘                        └─ faces/electron (planned)
+      ▲                            │                        ├─ faces/web
+      └──── plugin announce ───────┘                        ├─ pet window     (sprite)
+                                                            ├─ bubbles window (bubble stack)
+                                                            └─ panel window   (sessions + chat)
 ```
 
 - **Brain** (`src/`): no UI, no model logic. Holds the OpenCode client, the session/state
   machine, the permission queue, and serves snapshots to faces. Node 22+, zero deps.
-- **Faces**: render `{pet, sessions, permissions}` and post commands back. Web face today;
-  Electron pet window later. Same contract, so a platform problem never blocks features.
+- **Faces**: render `{pet, sessions, permissions}` and post commands back. The Electron
+  shell is three windows sharing one page by `#pet`/`#bubbles`/`#panel`; the web face is
+  another surface. Same contract, so a platform problem never blocks features. The sprite
+  window never resizes: the bubble and panel windows are sized/placed around it.
 - **Plugin** (`plugin/cute-pets.ts`): announces where a server lives. Optional — the brain
   also discovers servers by scanning listening ports of `opencode` processes.
 
@@ -67,35 +71,73 @@ Two traps found the hard way:
 
 ## 4. State model
 
-Per session: `running` (busy), `waiting` (approval or question pending), `error`
-(retry / session.error), `idle`. Priority for the pet and for list order:
-`waiting > error > running > idle`.
+Per session: `running` (busy), `waiting` (approval, agent form/question, or plan answer
+pending), `error` (retry / session.error), `idle`. Priority for the pet and for list
+order: `waiting > error > running > idle`. Within a priority, sessions are sorted by
+`updatedAt` (newest first). `updatedAt` uses the server's `session.time.updated` and local
+message/activity events; periodic syncs do not refresh it, so idle order stays stable and
+reflects the last real update.
 
 | Input | Effect |
 | --- | --- |
 | `session.status {status:{type:"busy"}}` | running |
-| `session.status {type:"idle"}` / `session.idle` | idle (unless a permission is pending → waiting) |
+| `session.status {type:"idle"}` / `session.idle` | idle (unless a permission or form is pending → waiting) |
 | `session.status {type:"retry"}` | error, detail from `action.label` |
 | `session.error` | error |
 | `permission.asked` / `permission.replied` | refetch `GET /permission`, recompute waiting |
+| `form.created` (v2) | add the pending form, recompute waiting |
+| `form.replied` / `form.cancelled` (v2) | drop the form, recompute waiting |
 | `message.part.updated` (text) | `lastText` tail |
 | `message.part.delta` | append to `lastText` |
+| `session.deleted` | remove the session immediately |
+| `session.activity` (v2 reasoning/tool) | update the live trace preview |
+
+`GET /api/session` is authoritative on the 30 s sync; sessions that disappear from it are
+removed, which also cleans up deleted sessions whose event was missed.
 
 Pet rollup: `waiting` if any session waits, else `error`, else `running`, else `idle`;
-label like "2 need you" / "1 failed" / "3 working" / "all done".
+label like "2 need you" / "1 failed" / "3 working" / "all done". If the driving session
+uses the `plan` agent and is not idle, the snapshot's `pet.plan` is true and the kind is
+`planning`.
+
+Message errors are rendered as fatal (red) only when the turn did not continue: if any
+later assistant message without an error exists, the earlier error was retried and is
+shown muted as `retried`. A retryable error (429/5xx/network/timeout) is shown as
+`retrying` while the session is still running. The same rule keeps the collapsed process
+trace from turning red for a recovered provider/tool failure.
+
+Session records include a live `activity`
+`{kind:"thinking"|"tool", text, tool, detail, status, at}` from v2
+`session.reasoning.*` and `session.tool.*` events; the face uses it for the last process
+trace preview and clears it when the session becomes idle.
 
 ## 5. Face API (stable contract)
 
-- `GET /api/state` — snapshot `{generatedAt, pet, servers[], sessions[], permissions[]}`
+- `GET /api/state` — snapshot `{generatedAt, pet, servers[], sessions[], permissions[], forms[]}`
 - `GET /api/events` — SSE, `event: state` with the same snapshot on every change (~120 ms debounce)
-- `POST /api/prompt` — `{text, sessionId?|server?, newSession?, title?}` → `{server, sessionId}`
+- `POST /api/prompt` — `{text, sessionId?|server?, newSession?, title?, directory?, model?, agent?}`
+  → `{server, sessionId, session}`; v2 creates the session with a `location`
+- `GET /api/defaults` — `{directory, server, model, agent}` (last used / server default)
+- `POST /api/checkdir` — `{directory, server?}` → `{ok, directory, server, wsl}`;
+  validates on the brain host or its WSL UNC mount
 - `POST /api/abort` — `{server, sessionId}`
 - `POST /api/permission` — `{id, reply}`
-- `GET /api/messages?server&sessionId&limit` — normalized `{role, parts, tokens, time}`
+- `POST /api/form` — `{server, sessionId, formId, answer}`; answers a v2 agent question
+  and returns `{ok:true}`
+- `POST /api/session/action` — `{sessionId, action, value}`; includes `move` (v2),
+  `fork`, `model`, `agent`
+- `GET /api/messages?server&sessionId&limit` — normalized
+  `{role, parts, tokens, time, error}`; parts are `text`, `reasoning`, `tool`
+  (`name/status/input/output`) or `file`, so faces can collapse the process trace
+- `GET /api/message-page?server&sessionId&limit&order&type&cursor&compact`
+  — the same normalized messages plus the v2 `cursor` (`{previous,next}`) and `hasMore`.
+  A lookahead row is requested because v2 returns a cursor even on the last page;
+  `hasMore` is what decides whether the face shows “Load earlier”. Cursor pages are used
+  for “Load earlier”; `type=user&order=asc&limit=1` fetches the opening prompt.
 - `POST /api/announce` — plugin discovery `{serverUrl, directory}`
 - `GET /` — web face
 
-Session object: `{server,id,title,slug,directory,dirName,agent,model,state,detail,tokens,cost,lastText,updatedAt,pending[]}`.
+Session object: `{server,id,title,slug,directory,dirName,agent,model,state,detail,activity,tokens,cost,lastText,updatedAt,pending[],forms[]}`.
 
 ## 6. Pet rendering
 
@@ -107,19 +149,43 @@ base frames 192×208, OpenPets-style activity strips (`activities/<id>.webp`, 4�
 | --- | --- |
 | idle | idle loop |
 | running | working loop (thinking/editing variants from tool events later) |
-| waiting | attention pose + badge, speech bubble with the permission name |
+| waiting | attention pose + badge, speech bubble with the permission/form name |
 | error | error pose, stays until acknowledged |
+| plan | review pose (row 8) with a violet aura |
+
+Each state has a coloured aura: idle green (`#6ee7a8`), running blue (`#5ac8ff`),
+waiting amber (`#ffc65c`), error red (`#ff6b6b`), plan violet (`#a78bfa`). Plan mode keeps
+the waiting/error pose when it needs attention, but uses the violet aura. The whole aura
+layer is gated by the shell config `auras` (Settings → Auras).
+
+Codex V2 sheets use `0 idle, 1 running-right, 2 running-left, 3 waving, 4 jumping,
+5 failed, 6 waiting, 7 running, 8 review, 9–10 look directions`. The face uses
+`{idle:0, running:2, waiting:6, error:5, plan:8}` by default; a pack can override any
+entry with `"rows"` in `pet.json` (the built-in chibi-knight declares `error:9` because
+its sheet is custom and has no review row). Plan mode keeps the waiting/error pose when
+it needs attention, but always keeps the violet colour/aura.
 
 ## 7. Cross-platform
 
 | | Windows | Linux X11 | Linux Wayland (native) | Linux Wayland (XWayland) |
 | --- | --- | --- | --- | --- |
 | transparent frameless | ✓ | ✓ | ✓ | ✓ |
-| click-through | ✓ | ✓ (Electron ≥43) | ✓ (Electron ≥43; before that a no-op) | ✓ |
+| click-through | ✗ see note | ✗ see note | ✗ see note | ✗ see note |
 | drag pet | ✓ | ✓ | ✓ (draggable regions) | ✓ |
 | park at position | ✓ | ✓ | ✗ `setPosition` unsupported | ✓ |
 | always on top | ✓ | ✓ | ✗ `alwaysOnTop` unsupported | ✓ (compositor honors `_NET_WM_STATE_ABOVE`) |
 | global hotkey | ✓ | mostly | portal-restricted | same |
+
+Click-through note: `IgnoreMouseEventsOptions.forward` is Windows/macOS only, and
+XWayland derives a surface's input region from the X input shape. Electron's
+`setIgnoreMouseEvents(true)` empties that shape, and nothing can restore it from the page
+once it is empty. Instead of click-through, the shell uses three content-sized windows:
+the sprite window is fixed (`260×222`, never resized), the bubble window is sized to the
+stack, and the panel window is sized to the room above/below the sprite when it opens.
+Each window covers only what it draws, so the space around them belongs to other apps,
+and nothing ever resizes the sprite window — a bubble appearing/disappearing or the panel
+opening cannot move the pet. The tooltip is drawn pointer-transparently in the pet window
+on behalf of the bubble window.
 
 Plan: one Electron binary (≥43). On Linux, detect `XDG_SESSION_TYPE=wayland` and default
 to `--ozone-platform=x11` so the pet can be parked and pinned; offer `--ozone-platform=wayland`
@@ -127,10 +193,11 @@ for native mode (positions are compositor-controlled, user drags once). If a tru
 Wayland-native pet is ever required, add a `gtk4-layer-shell` face — a third surface, not
 a rewrite, because the brain holds all state.
 
-Platform isolation: faces keep the OS-specific bits behind `placePet / setClickThrough /
-tray / notify / hotkey`. Tray is never the only door (GNOME needs AppIndicator), so the pet
-window must open the session menu and composer itself. Autostart: XDG desktop file,
-Run key, LaunchAgent. Packaging: AppImage first, deb/rpm later, no Flatpak in v1.
+Platform isolation: faces keep the OS-specific bits behind `placePet / placePanel /
+placeBubbles / tray / notify / hotkey`. Tray is never the only door (GNOME needs
+AppIndicator), so the pet window opens the shell-owned panel window, which carries the
+session menu and composer. Autostart: XDG desktop file, Run key, LaunchAgent. Packaging:
+AppImage first, deb/rpm later, no Flatpak in v1.
 
 ## 7b. Shell config
 
@@ -139,10 +206,24 @@ Run key, LaunchAgent. Packaging: AppImage first, deb/rpm later, no Flatpak in v1
 | key | values | meaning |
 | --- | --- | --- |
 | `facing` | `"right"` (default) \| `"left"` | which way the sprite is drawn; `left` is a horizontal mirror |
+| `lastDirectory` | absolute path | last directory a chat was created in / moved to; the blank chat starts here |
+| `lastModel` | `{id,providerID,variant}` | last model picked with `/model` (also used for the next blank chat) |
+| `lastAgent` | string | last agent picked with `/agent` |
+| `auras` | boolean (default `true`) | coloured glow around the pet for idle/running/waiting/error/plan |
+| `sendWith` | `"ctrl-enter"` (default) \| `"enter"` | whether Ctrl/Cmd+Enter or Enter sends; in Enter mode Shift+Enter adds a newline |
+| `petPosition` | `{x,y}` | last pet window position in screen coordinates; restored if it still overlaps a display |
 
 Precedence: `--facing` CLI flag → config file → default. Changing facing in the UI
-(double-click) writes the file, so it survives restarts. Window position is also worth
-persisting later; it is desktop-owned state, not a session concern.
+(double-click) writes the file, so it survives restarts. The pet position is written on
+drag end and menu moves; it is desktop-owned state, not a session concern.
+
+Multi-monitor placement uses the union of all display work areas (`screen.getAllDisplays`)
+rather than the display the window currently matches, so the sprite can cross a monitor
+seam. If a diagonal layout leaves a hole, the position snaps to the nearest work area;
+`display-added`/`display-removed`/`display-metrics-changed` re-clamp it. The bubble and
+panel windows use `getDisplayMatching(petWin)` and therefore follow the pet to its
+monitor. Right-click → **Move to display** parks the pet on a chosen display. Native
+Wayland may still refuse programmatic positioning; the shell's XWayland mode is unaffected.
 
 ## 7c. Remote / WSL servers
 
@@ -159,8 +240,32 @@ persisting later; it is desktop-owned state, not a session concern.
   `content[]` instead of `parts[]` (user text is `m.text`), newest-first message order,
   `delivery:"queue"` for prompts, `interrupt` instead of `abort`, `{action,resources}`
   permission replies, and event translation
-  (`session.execution.*`/`session.text.*` → v1 names). Model/agent/compact/share/revert
-  are not implemented for v2.
+  (`session.execution.*`/`session.text.*` → v1 names, plus `session.deleted`,
+  `session.reasoning.*` and `session.tool.*` for the live activity preview). Fork is
+  implemented
+  (`POST /api/session/{id}/fork`; `session.forked` carries no info, so the client fetches
+  the new session to pick up its `(fork #N)` title). Model/agent switch
+  (`/api/session/{id}/model`, `/agent`), session move (`/api/session/{id}/move`) and
+  creating at a `location` are implemented for v2. Compact/share/revert are not.
+- **v2 forms** are agent questions that block a session: `GET /api/form?location[directory]=…`
+  lists pending forms for a location, `POST /api/session/{id}/form/{formID}/reply`
+  `{answer}` answers one, and `DELETE …/form/{formID}?message=…` cancels. Events are
+  `form.created` (`data.form`), `form.replied` and `form.cancelled`. Fields are
+  `string` (optionally with `options`/`custom`), `number`, `integer`, `boolean`,
+  `multiselect` and `external`; the answer is `{key: value}` and an external field must be
+  acknowledged with `true`. The brain fetches forms per session directory, turns a
+  pending form into `waiting`, and exposes the answer route as `POST /api/form`.
+- **Plan mode uses a synthetic turn.** Creating a session with the `plan` agent (or
+  switching to it) enqueues a `synthetic` message with `delivery:"steer"` containing the
+  Plan-mode reminder, and that starts an execution immediately. The brain checks the
+  session inbox; when that reminder is still pending (or the session is already running)
+  it sends the first user prompt with `delivery:"steer"` too, so both are delivered into
+  the same turn. Queueing would make the model answer the reminder alone first.
+- **Directories are server-side.** v2 servers host sessions at arbitrary locations on
+  one server; v1 servers are bound to one cwd and need a spawned server per directory.
+  `/cd` validates the path on the brain host (or maps a WSL POSIX path through
+  `//wsl.localhost/<distro>`), then moves a v2 session or sets the draft directory for
+  the first message. No native folder picker: it only sees the Windows filesystem.
 
 ## 8. Risks to verify
 
