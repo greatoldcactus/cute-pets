@@ -114,8 +114,9 @@ The chat opens at the newest message (normal chronological order, scrolled to th
 after reading back, a small **↓** button returns to the latest. Consecutive assistant
 steps that only contain thinking/tool calls are grouped into one collapsed trace
 (`15 steps · 17 tools · 15 thinking`) per turn, expandable to the individual calls with
-their input/output. Provider errors stay visible as a compact line (muted for aborted
-steps, red for provider failures).
+their input/output. Provider errors stay visible as a compact line: muted for aborted
+steps and for errors that were retried and followed by another assistant step, red only
+when the turn actually failed.
 
 **New chat** — a blank chat with the last directory and model shown in the header. `Ctrl+N`
 and the pet's right-click *New chat* reach the same thing. `/cd` and `/model` apply to the
