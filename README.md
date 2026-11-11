@@ -57,7 +57,9 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
 4. **`/` in the composer** lists commands — agent ones (`/init`, `/review`) and pet ones
    (`/cd`, `/fork`, `/model`, `/agent`, `/compact`, `/undo`, `/redo`, `/share`, `/abort`,
    `/pets`). Tab completes the highlighted command (or directory) into the composer so
-   you can keep typing; Enter runs the selection.
+   you can keep typing; Enter runs the selection. After `/cd` the directory suggestions
+   stay open and filter as you type (they are the current/last directory and every
+   session's directory; type any other absolute path and press Enter).
 5. **Right-click a session or bubble → Hide from pet** to clear finished work out of the
    way. Nothing is deleted; Settings has an *unhide* list.
 

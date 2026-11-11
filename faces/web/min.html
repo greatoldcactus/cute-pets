@@ -790,13 +790,21 @@ function dirChoices(){
   return [...seen.values()].sort((a,b)=>
     (a.why==="current"?0:1)-(b.why==="current"?0:1) || a.dir.localeCompare(b.dir));
 }
-function openDirPalette(){
+function cdPrefix(value){
+  const m=String(value||"").match(/^\/cd(?:\s+([\s\S]*))?$/);
+  return m ? (m[1] ?? "") : null;
+}
+function openDirPalette(prefix=""){
+  const q=String(prefix||"").trim().replace(/[\\/]+$/,"").toLowerCase();
+  const dirs=dirChoices().filter(d=>!q || d.dir.toLowerCase().startsWith(q));
+  if(!dirs.length){ closePalette(); return false; }
   palMode="dirs";
-  palItems=dirChoices().map(d=>({kind:"dir",label:d.dir,sub:d.why,value:d.dir}));
+  palItems=dirs.map(d=>({kind:"dir",label:d.dir,sub:d.why,value:d.dir}));
   palSel=0;
-  pal.classList.toggle("on",palItems.length>0);
+  pal.classList.add("on");
   pal.innerHTML=palItems.map((it,i)=>`<div class="pitem ${i===0?"sel":""}" data-i="${i}">
       <span class="n">${esc(it.label)}</span><span class="d">${esc(it.sub)}</span></div>`).join("");
+  return true;
 }
 function openPalette(prefix="",mode="root"){
   palMode=mode;
@@ -903,19 +911,21 @@ async function changeDir(p){
 $("#prompt").addEventListener("input",e=>{
   const v=e.target.value;
   if(palMode==="dirs"){
-    if(/^\/cd\s+$/.test(v)) return; // keep the directory suggestions
-    closePalette(); return;        // typing a path hides them; Enter will submit
+    if(!/^\/cd\s+/.test(v)){ closePalette(); return; }
+    openDirPalette(cdPrefix(v)); // keep filtering the known directories
+    return;
   }
-  if(/^\/cd\s+$/.test(v)){ openDirPalette(); return; }
   if(palMode!=="root"){
     if(!v.startsWith("/")) closePalette();
     else openPalette(v.slice(1).split(" ")[0], palMode);
     return;
   }
+  if(v==="/cd"){ openPalette("cd"); return; }
+  if(v.startsWith("/cd ")){ openDirPalette(cdPrefix(v)); return; }
   if(v.startsWith("/")){
     const rest=v.slice(1);
     // once arguments start the palette is for command names only; let Enter
-    // submit the line instead of re-selecting /cd and wiping the argument
+    // submit the line instead of re-selecting the command and wiping the args
     if(rest.includes(" ")){ closePalette(); return; }
     openPalette(rest);
     return;
@@ -926,8 +936,19 @@ $("#prompt").addEventListener("input",e=>{
 // has no text to complete, so Tab leaves the list alone there.
 function fillPaletteSelection(){
   const it=palItems[palSel]; if(!it) return false;
-  if(it.kind==="command"||it.kind==="pet"){ $("#prompt").value=it.label+" "; closePalette(); $("#prompt").focus(); return true; }
-  if(it.kind==="dir"){ $("#prompt").value="/cd "+it.value; closePalette(); $("#prompt").focus(); return true; }
+  if(it.kind==="command"||it.kind==="pet"){
+    $("#prompt").value=it.label+" ";
+    if(it.label==="/cd") openDirPalette(""); // keep suggesting directories
+    else closePalette();
+    $("#prompt").focus();
+    return true;
+  }
+  if(it.kind==="dir"){
+    $("#prompt").value="/cd "+it.value;
+    openDirPalette(it.value); // re-filter, keep the list open
+    $("#prompt").focus();
+    return true;
+  }
   return false;
 }
 $("#prompt").addEventListener("keydown",e=>{
@@ -941,12 +962,21 @@ $("#prompt").addEventListener("keydown",e=>{
     e.preventDefault();
     fillPaletteSelection(); // no-op for model/agent lists
   } else if(e.key==="Enter"){
+    if(palMode==="dirs"){
+      const typed=cdPrefix($("#prompt").value);
+      // with a path typed, let Enter submit the line; with no path, run the
+      // highlighted suggestion
+      if(typed && typed.trim()) return;
+      e.preventDefault(); choosePalette(palSel); return;
+    }
     e.preventDefault(); choosePalette(palSel);
   } else if(e.key==="Escape"){ closePalette(); }
 });
 pal.addEventListener("click",e=>{
   const it=e.target.closest("[data-i]"); if(!it) return;
-  choosePalette(Number(it.dataset.i));
+  const i=Number(it.dataset.i);
+  if(palItems[i]?.kind==="dir"){ palSel=i; fillPaletteSelection(); return; }
+  choosePalette(i);
 });
 
 $("#composer").addEventListener("submit",async e=>{
@@ -964,6 +994,7 @@ $("#composer").addEventListener("submit",async e=>{
 
   if(raw==="/cd"||raw.startsWith("/cd ")){
     $("#prompt").value="";
+    closePalette();
     await changeDir(raw.slice(3).trim());
     return;
   }
