@@ -65,6 +65,8 @@ export class PetState {
     if (!info?.id) return null;
     const key = keyOf(server, info.id);
     let rec = this.sessions.get(key);
+    const isNew = !rec;
+    const serverUpdated = Number(info.time?.updated) || 0;
     if (!rec) {
       rec = {
         key,
@@ -82,7 +84,7 @@ export class PetState {
         cost: 0,
         lastText: "",
         lastAssistantID: null,
-        updatedAt: Date.now(),
+        updatedAt: serverUpdated || Date.now(),
       };
       this.sessions.set(key, rec);
     }
@@ -92,7 +94,11 @@ export class PetState {
     if (info.model) rec.model = info.model;
     if (info.tokens) rec.tokens = { input: info.tokens.input ?? 0, output: info.tokens.output ?? 0 };
     if (typeof info.cost === "number") rec.cost = info.cost;
-    rec.updatedAt = Date.now();
+    // A periodic sync re-sends the same session metadata. Do not make every idle
+    // session look freshly updated: prefer the server's last-update timestamp.
+    if (isNew) rec.updatedAt = serverUpdated || Date.now();
+    else if (serverUpdated) rec.updatedAt = Math.max(rec.updatedAt || 0, serverUpdated);
+    else rec.updatedAt = Date.now();
     this.touch();
     return rec;
   }
@@ -104,6 +110,9 @@ export class PetState {
       if (type === "idle") return;
       return this.upsertSession(server, { id }) && this.setStatus(server, id, status);
     }
+    const prevState = rec.state;
+    const prevDetail = rec.detail;
+    const prevActivity = rec.activity;
     if (type === "busy") {
       rec.state = STATE.RUNNING;
       rec.detail = null;
@@ -117,7 +126,11 @@ export class PetState {
       rec.detail = status.action?.label ?? status.message ?? "retrying";
       rec.activity = null;
     }
-    rec.updatedAt = Date.now();
+    // A status poll re-sends an unchanged state; only real transitions should
+    // move a session to the top of the idle list.
+    if (rec.state !== prevState || rec.detail !== prevDetail || rec.activity !== prevActivity) {
+      rec.updatedAt = Date.now();
+    }
     this.touch();
   }
 

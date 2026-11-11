@@ -73,6 +73,14 @@ export class OpenCodeV2Client {
       model: s.model,
       tokens: s.tokens,
       cost: s.cost,
+      time: s.time
+        ? {
+            created: s.time.created ?? null,
+            updated: s.time.updated ?? null,
+            busy: s.time.busy ?? null,
+            idle: s.time.idle ?? null,
+          }
+        : null,
     };
   }
 

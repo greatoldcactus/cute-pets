@@ -70,7 +70,8 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
 
 **Sessions** — every session with its real title, project directory, agent, model and
 token/cost totals, deduplicated across the several `opencode serve` processes that can
-share one database.
+share one database. Sessions that need you or are running come first; idle sessions are
+ordered by their last update (most recent first), so recent work stays findable.
 
 **Forking** — `/fork` (or right-click a session → Fork) forks the selected session at its
 latest message through the server's own fork endpoint. The child is selected, keeps the
