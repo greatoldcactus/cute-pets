@@ -21,6 +21,7 @@ export class PetState {
     this.servers = new Map(); // url -> {url, directory, online, lastEventAt, error}
     this.hidden = new Map(); // session id -> {id, server, title, at}; pet-side only, never deletes
     this.permissions = new Map(); // permission id -> [key, request]
+    this.forms = new Map(); // form id -> [key, form]
     this.listeners = new Set();
     this.timer = null;
   }
@@ -64,6 +65,8 @@ export class PetState {
     if (!info?.id) return null;
     const key = keyOf(server, info.id);
     let rec = this.sessions.get(key);
+    const isNew = !rec;
+    const serverUpdated = Number(info.time?.updated) || 0;
     if (!rec) {
       rec = {
         key,
@@ -76,11 +79,12 @@ export class PetState {
         model: null,
         state: STATE.IDLE,
         detail: null,
+        activity: null,
         tokens: { input: 0, output: 0 },
         cost: 0,
         lastText: "",
         lastAssistantID: null,
-        updatedAt: Date.now(),
+        updatedAt: serverUpdated || Date.now(),
       };
       this.sessions.set(key, rec);
     }
@@ -90,7 +94,11 @@ export class PetState {
     if (info.model) rec.model = info.model;
     if (info.tokens) rec.tokens = { input: info.tokens.input ?? 0, output: info.tokens.output ?? 0 };
     if (typeof info.cost === "number") rec.cost = info.cost;
-    rec.updatedAt = Date.now();
+    // A periodic sync re-sends the same session metadata. Do not make every idle
+    // session look freshly updated: prefer the server's last-update timestamp.
+    if (isNew) rec.updatedAt = serverUpdated || Date.now();
+    else if (serverUpdated) rec.updatedAt = Math.max(rec.updatedAt || 0, serverUpdated);
+    else rec.updatedAt = Date.now();
     this.touch();
     return rec;
   }
@@ -102,17 +110,27 @@ export class PetState {
       if (type === "idle") return;
       return this.upsertSession(server, { id }) && this.setStatus(server, id, status);
     }
+    const prevState = rec.state;
+    const prevDetail = rec.detail;
+    const prevActivity = rec.activity;
     if (type === "busy") {
       rec.state = STATE.RUNNING;
       rec.detail = null;
+      rec.activity = null;
     } else if (type === "idle") {
-      rec.state = this.pendingFor(rec.key).length ? STATE.WAITING : STATE.IDLE;
+      rec.state = this.hasPending(rec.key) ? STATE.WAITING : STATE.IDLE;
       rec.detail = null;
+      rec.activity = null;
     } else if (type === "retry") {
       rec.state = STATE.ERROR;
       rec.detail = status.action?.label ?? status.message ?? "retrying";
+      rec.activity = null;
     }
-    rec.updatedAt = Date.now();
+    // A status poll re-sends an unchanged state; only real transitions should
+    // move a session to the top of the idle list.
+    if (rec.state !== prevState || rec.detail !== prevDetail || rec.activity !== prevActivity) {
+      rec.updatedAt = Date.now();
+    }
     this.touch();
   }
 
@@ -121,14 +139,35 @@ export class PetState {
     if (!rec) return;
     rec.state = STATE.ERROR;
     rec.detail = message ?? "error";
+    rec.activity = null;
     rec.updatedAt = Date.now();
     this.touch();
   }
 
   removeSession(server, id) {
     this.sessions.delete(keyOf(server, id));
-    for (const [pid, [key]] of this.permissions) if (key === keyOf(server, id)) this.permissions.delete(pid);
+    const key = keyOf(server, id);
+    for (const [pid, [k]] of this.permissions) if (k === key) this.permissions.delete(pid);
+    for (const [fid, [k]] of this.forms) if (k === key) this.forms.delete(fid);
     this.touch();
+  }
+
+  // The server's session list is authoritative. Drop records it no longer
+  // lists (deleted sessions were lingering and then failing to load messages).
+  reconcileSessions(server, ids) {
+    const keep = new Set(ids);
+    let changed = false;
+    for (const [key, rec] of [...this.sessions]) {
+      if (rec.server !== server || keep.has(rec.id)) continue;
+      this.sessions.delete(key);
+      for (const [pid, [k]] of this.permissions) if (k === key) this.permissions.delete(pid);
+      for (const [fid, [k]] of this.forms) if (k === key) this.forms.delete(fid);
+      changed = true;
+    }
+    if (changed) {
+      this.recomputeWaiting();
+      this.touch();
+    }
   }
 
   noteAssistantPart(server, id, part) {
@@ -136,6 +175,7 @@ export class PetState {
     if (!rec || !part) return;
     if (part.type === "text" && typeof part.text === "string") {
       rec.lastText = part.text.slice(-600);
+      rec.activity = null; // the answer is visible; the trace no longer needs a preview
       rec.updatedAt = Date.now();
       this.touch();
     }
@@ -145,6 +185,28 @@ export class PetState {
     const rec = this.sessions.get(keyOf(server, id));
     if (!rec || typeof delta !== "string") return;
     rec.lastText = (rec.lastText + delta).slice(-600);
+    rec.activity = null;
+    rec.updatedAt = Date.now();
+    this.touch();
+  }
+
+  // A small live summary for the process trace: the latest thought, or the tool
+  // that is currently running. Deliberately separate from the message history.
+  noteActivity(server, id, activity) {
+    const rec = this.sessions.get(keyOf(server, id));
+    if (!rec || !activity) return;
+    const prev = rec.activity;
+    rec.activity = {
+      kind: activity.kind || "thinking",
+      text: activity.text !== undefined
+        ? String(activity.text ?? "").slice(-400)
+        : (activity.kind === "thinking" ? (prev?.text ?? "") : ""),
+      tool: activity.tool ?? null,
+      detail: activity.detail ? String(activity.detail).slice(0, 160) : null,
+      status: activity.status ?? null,
+      callID: activity.callID ?? null,
+      at: Date.now(),
+    };
     rec.updatedAt = Date.now();
     this.touch();
   }
@@ -173,10 +235,48 @@ export class PetState {
     return out;
   }
 
+  // v2 forms are questions asked by the agent; they wait for an answer just like
+  // permission requests do.
+  replaceForms(server, list) {
+    for (const [fid, [key]] of [...this.forms]) {
+      if (key.startsWith(server + "::")) this.forms.delete(fid);
+    }
+    for (const form of list ?? []) {
+      if (!form?.id || !form.sessionID) continue;
+      this.forms.set(form.id, [keyOf(server, form.sessionID), form]);
+    }
+    this.recomputeWaiting();
+  }
+
+  upsertForm(server, form) {
+    if (!form?.id || !form.sessionID) return;
+    this.forms.set(form.id, [keyOf(server, form.sessionID), form]);
+    this.recomputeWaiting();
+  }
+
+  removeForm(id) {
+    if (!this.forms.delete(id)) return;
+    this.recomputeWaiting();
+  }
+
+  formsFor(key) {
+    const out = [];
+    for (const [fid, [k, form]] of this.forms) {
+      if (k === key) out.push({ id: fid, ...form });
+    }
+    return out;
+  }
+
+  hasPending(key) {
+    if (this.pendingFor(key).length) return true;
+    for (const [, [k]] of this.forms) if (k === key) return true;
+    return false;
+  }
+
   recomputeWaiting() {
     for (const rec of this.sessions.values()) {
-      const pending = this.pendingFor(rec.key);
-      if (pending.length) rec.state = STATE.WAITING;
+      const pending = this.hasPending(rec.key);
+      if (pending) rec.state = STATE.WAITING;
       else if (rec.state === STATE.WAITING) rec.state = STATE.IDLE;
     }
     this.touch();
@@ -186,14 +286,19 @@ export class PetState {
     const counts = { waiting: 0, error: 0, running: 0, idle: 0 };
     for (const s of sessions) counts[s.state] = (counts[s.state] ?? 0) + 1;
     const state = counts.waiting ? "waiting" : counts.error ? "error" : counts.running ? "running" : "idle";
+    // The pet has one body: colour/pose follow the session that drives the rollup
+    // (the urgent one, else the most recently updated).
+    const top = sessions[0];
+    const plan = Boolean(top && top.agent === "plan" && top.state !== "idle");
     const label =
       state === "waiting" ? `${counts.waiting} need${counts.waiting === 1 ? "s" : ""} you`
       : state === "error" ? `${counts.error} failed`
-      : state === "running" ? `${counts.running} working`
+      : state === "running" ? `${counts.running} ${plan ? "planning" : "working"}`
       : sessions.length ? "all done" : "no sessions";
     return {
       state,
-      kind: KIND_OF_STATE[state],
+      plan,
+      kind: plan ? "planning" : KIND_OF_STATE[state],
       label,
       counts,
       total: sessions.length,
@@ -246,6 +351,7 @@ export class PetState {
         model: rec.model,
         state: rec.state,
         detail: rec.detail,
+        activity: rec.activity,
         tokens: rec.tokens,
         cost: rec.cost,
         lastText: rec.lastText,
@@ -254,6 +360,12 @@ export class PetState {
           id: p.id,
           permission: p.permission,
           patterns: p.patterns ?? [],
+        })),
+        forms: this.formsFor(rec.key).map((f) => ({
+          id: f.id,
+          title: f.title ?? "",
+          fields: f.fields ?? [],
+          metadata: f.metadata ?? null,
         })),
       }))
       .sort((a, b) => (PRIORITY[b.state] - PRIORITY[a.state]) || (b.updatedAt - a.updatedAt));
@@ -281,6 +393,15 @@ export class PetState {
         server: h.server ?? null,
       })),
       permissions,
+      forms: [...this.forms.entries()].map(([id, [key, form]]) => ({
+        id,
+        key,
+        server: key.split("::")[0],
+        sessionID: form.sessionID,
+        title: form.title ?? "",
+        fields: form.fields ?? [],
+        metadata: form.metadata ?? null,
+      })),
     };
   }
 }

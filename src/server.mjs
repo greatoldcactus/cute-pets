@@ -73,6 +73,7 @@ export function startServer({ port, host, store, api }) {
           description: pet.description,
           builtin: !!pet.builtin,
           url: `/pets/${pet.id}/${pet.spritesheetPath}`,
+          rows: pet.rows ?? null,
         });
       }
 
@@ -103,6 +104,13 @@ export function startServer({ port, host, store, api }) {
       }
 
       if (route === "GET /api/workspaces") return json(res, 200, { workspaces: api.workspaces() });
+
+      if (route === "GET /api/defaults") return json(res, 200, api.defaults());
+
+      if (route === "POST /api/checkdir") {
+        const body = await readBody(req);
+        return json(res, 200, api.checkdir({ directory: body.directory, server: body.server ?? null }));
+      }
 
       if (route === "POST /api/workspace") {
         const body = await readBody(req);
@@ -204,6 +212,8 @@ export function startServer({ port, host, store, api }) {
           text: body.text,
           command: body.command ?? null,
           directory: body.directory ?? null,
+          model: body.model ?? null,
+          agent: body.agent ?? null,
         });
         return json(res, 200, out);
       }
@@ -236,11 +246,34 @@ export function startServer({ port, host, store, api }) {
         return json(res, 200, out);
       }
 
+      if (route === "POST /api/form") {
+        const body = await readBody(req);
+        const out = await api.replyForm({
+          server: body.server ?? null,
+          sessionId: body.sessionId,
+          formId: body.formId,
+          answer: body.answer ?? {},
+        });
+        return json(res, 200, out);
+      }
+
       if (route === "GET /api/messages") {
         const server = url.searchParams.get("server");
         const sessionId = url.searchParams.get("sessionId");
         const limit = Number(url.searchParams.get("limit") ?? 20);
         const out = await api.messages({ server, sessionId, limit });
+        return json(res, 200, out);
+      }
+
+      if (route === "GET /api/message-page") {
+        const server = url.searchParams.get("server");
+        const sessionId = url.searchParams.get("sessionId");
+        const limit = Number(url.searchParams.get("limit") ?? 40);
+        const order = url.searchParams.get("order") === "asc" ? "asc" : "desc";
+        const type = url.searchParams.get("type");
+        const cursor = url.searchParams.get("cursor");
+        const compact = url.searchParams.get("compact") === "1";
+        const out = await api.messagePage({ server, sessionId, limit, order, type, cursor, compact });
         return json(res, 200, out);
       }
 

@@ -31,9 +31,36 @@ export class OpenCodeClient {
 
   health() { return this.get("/global/health"); }
   listSessions() { return this.get("/session"); }
+  getSession(id) { return this.get(`/session/${enc(id)}`); }
   statuses() { return this.get("/session/status"); }
   permissions() { return this.get("/permission"); }
-  messages(id, limit = 20) { return this.get(`/session/${enc(id)}/message?limit=${limit}`); }
+  async messages(id, limit = 20) {
+    const raw = await this.get(`/session/${enc(id)}/message?limit=${limit}`);
+    const partsOf = (m) => {
+      const parts = [];
+      for (const p of m.parts ?? []) {
+        if (p.type === "text" && p.text) parts.push({ type: "text", text: p.text });
+        else if (p.type === "reasoning" && p.text) parts.push({ type: "reasoning", text: p.text });
+        else if (p.type === "tool") {
+          const st = p.state ?? {};
+          parts.push({
+            type: "tool",
+            name: p.tool || p.name || "tool",
+            status: st.status || "unknown",
+            input: st.input ?? null,
+            output: st.output ?? st.metadata?.output ?? (st.error ? String(st.error) : ""),
+          });
+        } else if (p.type === "file") {
+          parts.push({ type: "file", name: p.filename || p.path || "file", path: p.path ?? null });
+        }
+      }
+      return parts;
+    };
+    return (raw ?? []).map((m) => ({
+      info: m.info,
+      parts: partsOf(m),
+    })).filter((m) => m.parts.length || m.info?.error);
+  }
   commands() { return this.get("/command"); }
   // Runs synchronously on the server (returns when the command finishes), so the
   // caller must not await it on the request path.
@@ -56,6 +83,12 @@ export class OpenCodeClient {
   unshare(id) { return this.#req(`/session/${enc(id)}/share`, { method: "DELETE" }); }
   revert(id, messageID) { return this.post(`/session/${enc(id)}/revert`, { messageID }); }
   unrevert(id) { return this.post(`/session/${enc(id)}/unrevert`, {}); }
+  forkSession(id, messageID = null) {
+    return this.post(`/session/${enc(id)}/fork`, messageID ? { messageID } : {});
+  }
+  setTitle(id, title) {
+    return this.#req(`/session/${enc(id)}`, { method: "PATCH", body: JSON.stringify({ title }) });
+  }
   createSession(body = {}) { return this.post("/session", body); }
   prompt(id, text, extra = {}) {
     return this.post(`/session/${enc(id)}/prompt_async`, { parts: [{ type: "text", text }], ...extra });

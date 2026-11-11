@@ -41,6 +41,17 @@ export function ensureBuiltin() {
       return null;
     }
   }
+  // Packs seeded before the row map existed should still get the built-in's
+  // animation map (its spritesheet intentionally differs from the Codex standard).
+  // Merge instead of copying so a user-edited description survives.
+  try {
+    const srcMeta = readPetJson(src);
+    const dstMeta = readPetJson(dest);
+    if (srcMeta?.rows && dstMeta && !dstMeta.rows) {
+      dstMeta.rows = srcMeta.rows;
+      fs.writeFileSync(path.join(dest, "pet.json"), JSON.stringify(dstMeta, null, 2) + "\n");
+    }
+  } catch {}
   if (!readConfig().activePet) writeConfig({ activePet: BUILTIN_ID });
   return BUILTIN_ID;
 }
@@ -106,6 +117,7 @@ export function listPets() {
       description: meta.description ?? "",
       active: entry.name === active,
       spritesheetPath: meta.spritesheetPath,
+      rows: meta.rows ?? null,
     });
   }
   pets.sort((a, b) => a.name.localeCompare(b.name));

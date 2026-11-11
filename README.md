@@ -12,14 +12,17 @@ into any of them. No tokens spent, no hooks required.
 
 ```
           opencode serve ──HTTP+SSE──▶ brain ──HTTP+SSE──▶ faces
-                 ▲                    (src/)               ├─ Electron pet window
-                 └── plugin announce ──┘                   └─ web tray / pet-only
+                 ▲                    (src/)               ├─ pet window     (sprite)
+                 └── plugin announce ──┘                   ├─ bubbles window (bubble stack)
+                                                           ├─ panel window   (sessions, chat)
+                                                           └─ web tray / pet-only
 ```
 
 - **brain** (`src/`, Node 22, zero runtime dependencies) — holds the OpenCode client,
   the state machine, the permission queue, and serves snapshots.
-- **faces** (`electron/`, `faces/web/`) — a frameless always-on-top sprite window and a
-  browser session tray. Both render the same `{pet, sessions, permissions}` snapshot.
+- **faces** (`electron/`, `faces/web/`) — three thin Electron windows (sprite, bubbles,
+  panel) plus a browser session tray. All render the same
+  `{pet, sessions, permissions}` snapshot.
 - **plugin** (`plugin/cute-pets.ts`, optional) — tells the brain where a server lives.
 
 ---
@@ -46,12 +49,18 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
 
 ### Five things to try first
 
-1. **Click the pet** — the panel opens next to her; click again to close.
-2. **Drag her** anywhere, including to the very top of the screen. Double-click flips the
-   sprite horizontally.
-3. **`+`** opens a compact popover: type a request, pick a folder, start a chat.
+1. **Click the pet** — the panel opens in its own window next to her; click again to close.
+2. **Drag her** anywhere — across monitors or to the very top of the screen.
+   Right-click the pet → **Move to display** to park her on another monitor.
+   Double-click flips the sprite horizontally.
+3. **`+`** opens a blank chat in the last used directory (or the server's default).
+   Type `/cd /path` to change it, `/model` to pick a model, then send the first message.
 4. **`/` in the composer** lists commands — agent ones (`/init`, `/review`) and pet ones
-   (`/model`, `/agent`, `/compact`, `/undo`, `/redo`, `/share`, `/abort`, `/pets`).
+   (`/cd`, `/fork`, `/model`, `/agent`, `/plan`, `/build`, `/compact`, `/undo`, `/redo`,
+   `/share`, `/abort`, `/pets`). Tab completes the highlighted command (or directory) into
+   the composer so you can keep typing; Enter runs the selection. After `/cd` the directory
+   suggestions stay open and filter as you type (they are the current/last directory and
+   every session's directory; type any other absolute path and press Enter).
 5. **Right-click a session or bubble → Hide from pet** to clear finished work out of the
    way. Nothing is deleted; Settings has an *unhide* list.
 
@@ -61,11 +70,29 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
 
 **Sessions** — every session with its real title, project directory, agent, model and
 token/cost totals, deduplicated across the several `opencode serve` processes that can
-share one database.
+share one database. Sessions that need you or are running come first; idle sessions are
+ordered by their last update (most recent first), so recent work stays findable.
 
-**States** — `running`, `waiting` (an approval is pending), `error`, `idle`, rolled up per
-pet with the urgent one winning. Bubbles float above the sprite for the sessions that need
-attention; hovering one shows its title, directory, state and the tail of the last message.
+**Forking** — `/fork` (or right-click a session → Fork) forks the selected session at its
+latest message through the server's own fork endpoint. The child is selected, keeps the
+parent's title with `(fork #N)`, and appears immediately instead of as `(untitled)`.
+
+**States** — `running`, `waiting` (an approval or an agent question is pending), `error`,
+`idle`, rolled up per pet with the urgent one winning. Bubbles float above the sprite for
+the sessions that need attention; hovering one shows its title, directory, state and the
+tail of the last message.
+
+**Plan mode** — `/plan` switches the selected session (or the draft) to OpenCode's
+read-only `plan` agent. The pet turns violet, uses the spritesheet's review row (row 8)
+with a violet aura. When a plan finishes it keeps a violet **plan ready** bubble instead
+of the normal ✓. `/build` switches back. A pack that has no review pose simply keeps its
+idle frame; the violet aura still marks the mode.
+
+**Questions (v2 forms)** — when the agent asks via OpenCode 2's form API, the session
+becomes `waiting` and a compact form card appears above the composer. It supports text,
+number/integer, boolean, multiselect and option strings, conditional fields (`when`),
+required fields and external-link acknowledgements. Answers are posted back to the
+session through the brain, the form disappears and the session resumes.
 
 **Finished work stays visible.** When a session ends while the pet is running it keeps a
 dashed bubble with a ✓ (up to four, newest first), so you can see what just completed and
@@ -75,25 +102,53 @@ anything that finished in the last 15 minutes.
 **Approvals** — permission requests are rendered as buttons: *once*, *always*, *reject*.
 Answered from the pet, the TUI never has to be found.
 
-**Chat** — type into any session from the panel, or start a new one. A folder without a
-running server gets its own `opencode serve` (Windows paths only — a Linux path must be an
-attached WSL server, and the brain says so instead of guessing).
+**Chat** — type into any session from the panel, or start a new one. `+` opens a blank
+chat; `/cd` validates and sets the directory (on v2 it moves an existing session), and
+`/model` / `/agent` work in the draft as well as on a session. The first message creates
+the session at the chosen location with the chosen model — no folder picker, no untitled
+session left behind. The composer is a five-row textarea. By default **Ctrl/Cmd+Enter**
+sends and Enter adds a newline; Settings → Send message can switch to **Enter sends,
+Shift+Enter adds a newline**. Typed-but-unsent text is kept per session and restored when
+you switch back. OpenCode 2 hosts sessions at arbitrary locations on one server; v1 keeps
+the old server-per-directory spawn. Messages render markdown:
+headings, lists, tables, links, inline code, and fenced code blocks with a language label
+and a copy button. Every user/assistant message with text also has a **copy** button
+(raw markdown) and selectable text. Rendering is local and dependency-free, and everything
+is HTML-escaped before markup is added.
 
-**New chat popover** — prompt, folder, start; four lines instead of a full panel. `Ctrl+N`
-and the pet's right-click menu reach the same thing.
+The chat opens at the newest message (normal chronological order, scrolled to the bottom);
+after reading back, a small **↓** button returns to the latest. Long sessions start with
+the **first user message** pinned at the top; **Load earlier** pages the omitted history
+in without losing your scroll position. Consecutive assistant steps that only contain
+thinking/tool calls are grouped into one collapsed trace
+(`15 steps · 17 tools · 15 thinking`) per turn, expandable to the individual calls with
+their input/output. While a session is running, the last trace shows a live line such as
+`● thinking · …` or `● shell · running · …`. Provider errors stay visible as a compact
+line: muted for aborted steps and for errors that were retried and followed by another
+assistant step, red only when the turn actually failed.
+
+**New chat** — a blank chat with the last directory and model shown in the header. `Ctrl+N`
+and the pet's right-click *New chat* reach the same thing. `/cd` and `/model` apply to the
+draft until the first message creates the session.
 
 **Pet packs** — Codex/OpenPets-compatible spritesheets (192×208 cells, 8 columns). A
 red-armoured chibi knight ships in the repo and is installed by default; any `.zip` or
 folder can be imported, switched at runtime and mirrored.
 
-**Placement** — the window is a fixed 560×800 with a transparent margin. Dragging clamps the
-*sprite*, not the window, so she can be parked against the top edge.
+**Placement** — three windows: a fixed-size sprite window, a bubble window sized to the
+stack, and the panel window. Dragging clamps the *sprite* to the virtual desktop, so she
+crosses monitor seams smoothly and can be parked against any edge. The position is saved
+in `petPosition` and restored on the next launch; if a monitor is unplugged, the pet is
+clamped back onto a remaining display. Right-click → **Move to display** parks her at the
+bottom-right of a chosen monitor.
 
-Opening the panel never moves the sprite. The panel is sized to the room that actually
-exists on screen (574 px when there is space, less when there is not) and drawn below the
-sprite when there is no room above. Only a forced side change moves the window, and that
-move happens while the panel is `visibility:hidden`, so nothing flashes at the old position.
-Menus are placed to the side of the sprite and never cover her.
+The pet window never resizes: bubbles and the panel live in their own always-on-top
+windows. A bubble appearing/disappearing, or the panel opening, therefore cannot move the
+sprite — the bubble window changes size on its own, hugging the stack and following her,
+and the panel window is sized to the room above the sprite (574 px when there is space,
+less when there is not) or placed below her when there is none. The new-chat popover (`+`)
+is a short panel window. Context menus are native menus, and the tooltip is drawn in the
+pet window (pointer-transparent) on behalf of the bubble window.
 
 **Hidden sessions** — pet-side only: the session keeps existing (and running) in OpenCode,
 it just stops appearing on the pet. Persisted in `~/.cute-pets/hidden.json`, restorable from
@@ -134,7 +189,16 @@ A pack is a directory with `pet.json` and a spritesheet:
 }
 ```
 
-Cells are 192×208, 8 columns; rows map to the pet's animations. Packs live in
+Cells are 192×208, 8 columns; rows map to the pet's animations. Codex V2 packs use the
+standard layout (`0 idle`, `2 running-left`, `5 failed`, `6 waiting`, `8 review`). A pack
+whose sheet differs can declare its own map in `pet.json`:
+
+```json
+"rows": { "idle": 0, "running": 2, "waiting": 6, "error": 9, "plan": 8 }
+```
+
+The built-in chibi-knight does this because it repurposes row 9 as its error pose and has
+no separate review pose. Without `rows`, the standard defaults are used. Packs live in
 `~/.cute-pets/pets/<id>/`, and the active one is `activePet` in the config.
 
 ---
@@ -188,8 +252,11 @@ on a v2 server; if you send one, the run sits in `running` while the server retr
 v2 differences the client already absorbs: prompts go out with `delivery: "queue"` (the
 default `steer` is dropped when no turn is running), messages are newest-first with
 `content[]` instead of `parts[]` and user text at `m.text`, permission replies use
-`{action, resources}`, and `/model`, `/agent`, `/compact`, `/share`, `/undo`, `/redo` are
-**not wired for v2**.
+`{action, resources}`, `/fork` is wired (`POST /api/session/{id}/fork`; the
+`session.forked` event is translated into a session fetch so the child's
+"… (fork #N)" title shows at once), `/model`/`/agent` use the v2 session routes,
+`/cd` uses `POST /api/session/{id}/move`, and `/compact`, `/share`, `/undo`, `/redo`
+are **not wired for v2**.
 
 ---
 
@@ -197,7 +264,7 @@ default `steer` is dropped when no turn is running), messages are newest-first w
 
 | Path | What |
 | --- | --- |
-| `~/.cute-pets/config.json` | `facing`, `activePet`, attached `servers` (with credentials) |
+| `~/.cute-pets/config.json` | `facing`, `auras`, `sendWith`, `activePet`, attached `servers` (with credentials), `lastDirectory`, `lastModel`, `lastAgent`, `petPosition` |
 | `pets/<id>/` (repo) | packs that ship with cute-pets: `chibi-knight` |
 | `~/.cute-pets/pets/<id>/` | installed pet packs (the built-in one is copied here on first run) |
 | `~/.cute-pets/hidden.json` | sessions hidden from the pet |
@@ -213,6 +280,15 @@ Facing is a config value, never inferred from screen position:
 `right` (default) is the sprite as authored, `left` is mirrored. Override per launch with
 `npm run shell -- --facing left`.
 
+Auras are on by default: idle is green, running blue, waiting amber, error red, and plan
+violet. Turn them all off with Settings → Auras or `{ "auras": false }` in the config.
+
+`sendWith` is `"ctrl-enter"` (default) or `"enter"`; the same choice is in
+Settings → Send message.
+
+The pet remembers where it was left as `petPosition` (screen coordinates). It is restored
+only if that spot still overlaps a display; otherwise the pet is clamped back on-screen.
+
 ---
 
 ## Brain API
@@ -220,7 +296,7 @@ Facing is a config value, never inferred from screen position:
 Everything a face needs, all JSON:
 
 ```
-GET  /api/state            {pet, sessions[], permissions[], servers[], hidden[]}
+GET  /api/state            {pet, sessions[], permissions[], forms[], servers[], hidden[]}
 GET  /api/events           SSE stream of the same snapshot
 GET  /api/health           {ok, uptime}
 GET  /api/pet  /api/pets   active pet + installed packs
@@ -228,12 +304,16 @@ POST /api/pets/import      {path}            .zip or folder
 POST /api/pets/active      {id}
 GET  /api/commands         agent commands from OpenCode (init, review, …)
 GET  /api/models  /api/agents  /api/workspaces
-POST /api/prompt           {text, sessionId?|newSession, directory?, model?, agent?}
+GET  /api/defaults         {directory, server, model, agent}   last used / server default
+POST /api/checkdir         {directory, server?}  validate a path (v2; WSL-aware)
+POST /api/prompt           {text, sessionId?|newSession, directory?, server?, model?, agent?}
 GET  /api/messages         ?server=&sessionId=&limit=
+GET  /api/message-page     ?server=&sessionId=&limit=&order=&type=&cursor=&compact=1
 POST /api/permission       {id, reply: once|always|reject}
+POST /api/form             {server, sessionId, formId, answer}   answer a v2 agent question
 POST /api/abort            {server, sessionId}
 POST /api/session/hide     {sessionId, hidden:true|false}
-POST /api/session/action   {sessionId, action: compact|undo|redo|share|model|agent, …}
+POST /api/session/action   {sessionId, action: move|fork|compact|undo|redo|share|model|agent, …}
 POST /api/attach  /api/detach  /api/announce
 POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI uses it
 ```
@@ -242,13 +322,18 @@ POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI 
 
 ## Limitations
 
-- OpenCode 2: model switch, agent switch, compact, share, undo/redo are v1-only.
+- OpenCode 2: compact, share, undo/redo are v1-only; fork, model/agent switch and
+  moving a session between directories (`/cd`) work on v2.
+- `/cd` cannot move a v1 session (the v1 server is bound to one directory); start a
+  new chat there instead.
+- The chat loads the last 30 messages only; older history is not paged in yet.
 - Permission replies on v2 use `{action, resources}`; that path has not been exercised
   against a live request.
-- The window is fixed-size by design (resizing a transparent window flickers on Windows),
-  so the panel flips instead of growing.
+- The pet, bubbles and panel are separate windows. The pet window is fixed and never
+  resizes; the bubble window is sized to the stack and the panel window to the room
+  available on screen.
 - Linux/macOS: the Electron shell is portable, but only Windows has been run in anger;
-  click-through and work-area clamping are the platform-specific parts.
+  window stacking and work-area clamping are the platform-specific parts.
 
 ## Development
 
@@ -256,8 +341,9 @@ POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI 
 npm run smoke        # end-to-end: attach, create a session, prompt, read the reply
 ```
 
-`npm run shell -- --dev` exposes a control server on `:4290` with `/size`, `/eval?js=…`
-and `/shot?file=…` — that is how the screenshot above was produced.
+`npm run shell -- --dev` exposes a control server on `:4290`: `/size`, `/eval?js=…` and
+`/shot?file=…` drive the pet window; `/bubble-…` and `/panel-…` do the same for the
+bubbles and panel windows.
 
 ```
 src/main.mjs        hub: discovery, attach, dispatch, hidden persistence
@@ -266,7 +352,8 @@ src/state.mjs       session/state machine, permissions, snapshots
 src/server.mjs      face API + SSE      src/pets.mjs  pet store + built-in seeding
 src/config.mjs      ~/.cute-pets/config.json
 pets/chibi-knight/  the pack that ships with the repo
-electron/main.cjs   sprite window, drag, dialogs, bounds lock
+electron/main.cjs   pet + panel windows, placement, menus, drag
+electron/sizes.cjs  window sizes shared by the shell and the face
 faces/web/min.html  the pet window UI   faces/web/index.html  full tray
 ```
 
