@@ -20,6 +20,7 @@ const PANEL_MAX_H = 574;
 const PANEL_MIN_H = 340;
 const PANEL_GAP = 6;
 const BUBBLE_GAP = 2;
+const MIN_VISIBLE = 40; // px of the pet/window that must stay on a real display
 
 let petWin = null;
 let bubbleWin = null;
@@ -30,10 +31,111 @@ let bubbleSize = { width: 0, height: 0 };
 let grab = null;
 
 // The pet window is a fixed size; move it without ever resizing it.
-function place(bounds) {
+function place(bounds, { save = false, panel = false } = {}) {
   petWin.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: PET.width, height: PET.height }, false);
   positionBubbles();
+  if (panel && panelOpen && panelWin && !panelWin.isDestroyed()) panelWin.setBounds(panelPlacement(), false);
+  if (save) rememberPosition();
 }
+
+// ---- displays -----------------------------------------------------------
+// Coordinates are Electron DIP screen coordinates. The virtual area lets the
+// pet cross the seam between adjacent monitors instead of being clamped to the
+// display it started on.
+function displayAreas() {
+  return screen.getAllDisplays().map((d) => d.workArea);
+}
+
+function virtualWorkArea() {
+  const areas = displayAreas();
+  if (!areas.length) return screen.getPrimaryDisplay().workArea;
+  const x = Math.min(...areas.map((a) => a.x));
+  const y = Math.min(...areas.map((a) => a.y));
+  const right = Math.max(...areas.map((a) => a.x + a.width));
+  const bottom = Math.max(...areas.map((a) => a.y + a.height));
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+function visibleEnough(rect) {
+  const needW = Math.min(MIN_VISIBLE, rect.width);
+  const needH = Math.min(MIN_VISIBLE, rect.height);
+  return displayAreas().some((a) => {
+    const w = Math.min(rect.x + rect.width, a.x + a.width) - Math.max(rect.x, a.x);
+    const h = Math.min(rect.y + rect.height, a.y + a.height) - Math.max(rect.y, a.y);
+    return w >= needW && h >= needH;
+  });
+}
+
+// Clamp a window position so `pet` (a rect relative to that window) stays on
+// the virtual desktop. If the monitors leave a hole, snap to the nearest real
+// work area so the pet cannot disappear into it.
+function clampPetWindow(x, y, pet) {
+  const area = virtualWorkArea();
+  const minX = area.x - pet.x;
+  const maxX = area.x + area.width - (pet.x + pet.width);
+  const minY = area.y - pet.y;
+  const maxY = area.y + area.height - (pet.y + pet.height);
+  let nx = Math.max(minX, Math.min(Math.round(x), maxX));
+  let ny = Math.max(minY, Math.min(Math.round(y), maxY));
+  const rect = { x: nx + pet.x, y: ny + pet.y, width: pet.width, height: pet.height };
+  if (visibleEnough(rect)) return { x: nx, y: ny };
+
+  const nearest = screen.getDisplayNearestPoint({
+    x: Math.round(rect.x + rect.width / 2),
+    y: Math.round(rect.y + rect.height / 2),
+  }).workArea;
+  nx = Math.max(nearest.x - pet.x, Math.min(nx, nearest.x + nearest.width - (pet.x + pet.width)));
+  ny = Math.max(nearest.y - pet.y, Math.min(ny, nearest.y + nearest.height - (pet.y + pet.height)));
+  return { x: Math.round(nx), y: Math.round(ny) };
+}
+
+function repositionPanel() {
+  if (panelOpen && panelWin && !panelWin.isDestroyed()) panelWin.setBounds(panelPlacement(), false);
+}
+
+function rememberPosition() {
+  if (!petWin || petWin.isDestroyed()) return;
+  const b = petWin.getBounds();
+  const pos = { x: b.x, y: b.y };
+  if (config.petPosition?.x === pos.x && config.petPosition?.y === pos.y) return;
+  config.petPosition = pos;
+  saveConfig({ ...readConfig(), petPosition: pos });
+}
+
+function startupPetPosition(primaryArea) {
+  const saved = config.petPosition;
+  const fallback = {
+    x: primaryArea.x + primaryArea.width - PET.width - MARGIN,
+    y: primaryArea.y + primaryArea.height - PET.height - MARGIN,
+  };
+  if (!saved || !Number.isFinite(saved.x) || !Number.isFinite(saved.y)) return fallback;
+  const pos = { x: Math.round(saved.x), y: Math.round(saved.y) };
+  if (visibleEnough({ ...pos, width: PET.width, height: PET.height })) return pos;
+  return clampPetWindow(pos.x, pos.y, { x: 0, y: 0, width: PET.width, height: PET.height });
+}
+
+function movePetToDisplay(display) {
+  const area = display.workArea;
+  const pos = clampPetWindow(
+    area.x + area.width - PET.width - MARGIN,
+    area.y + area.height - PET.height - MARGIN,
+    { x: 0, y: 0, width: PET.width, height: PET.height },
+  );
+  place(pos, { save: true, panel: true });
+}
+
+function keepPetOnScreen() {
+  if (!petWin || petWin.isDestroyed()) return;
+  const b = petWin.getBounds();
+  if (!visibleEnough({ x: b.x, y: b.y, width: b.width, height: b.height })) {
+    const pos = clampPetWindow(b.x, b.y, { x: 0, y: 0, width: b.width, height: b.height });
+    place(pos, { panel: true });
+    return;
+  }
+  positionBubbles();
+  repositionPanel();
+}
+
 
 // ---- config -------------------------------------------------------------
 const CONFIG_PATH = path.join(os.homedir(), ".cute-pets", "config.json");
@@ -186,16 +288,29 @@ async function brainPost(pathname, body) {
 
 // ---- native menus -------------------------------------------------------
 function petMenu() {
+  const displays = screen.getAllDisplays();
+  const primary = screen.getPrimaryDisplay();
   const items = [
     { label: "New chat…", click: () => showPanel({ action: "new" }) },
     { label: "Sessions", click: () => showPanel({ view: "chat" }) },
     { label: "Pets", click: () => showPanel({ view: "pets" }) },
     { label: "Settings", click: () => showPanel({ view: "settings" }) },
+  ];
+  if (displays.length > 1) {
+    items.push({ type: "separator" }, {
+      label: "Move to display",
+      submenu: displays.map((d, i) => ({
+        label: `${d.label || `Display ${i + 1}`} · ${d.workArea.width}×${d.workArea.height}${d.id === primary.id ? " (primary)" : ""}`,
+        click: () => movePetToDisplay(d),
+      })),
+    });
+  }
+  items.push(
     { type: "separator" },
     { label: panelOpen ? "Hide panel" : "Show panel", click: togglePanel },
     { type: "separator" },
     { label: "Quit", click: () => app.quit() },
-  ];
+  );
   Menu.buildFromTemplate(items).popup({ window: petWin });
 }
 
@@ -224,12 +339,13 @@ function load(w, surface) {
 
 app.whenReady().then(() => {
   const area = screen.getPrimaryDisplay().workArea;
+  const start = startupPetPosition(area);
 
   petWin = new BrowserWindow({
     width: PET.width,
     height: PET.height,
-    x: area.x + area.width - PET.width - MARGIN,
-    y: area.y + area.height - PET.height - MARGIN,
+    x: start.x,
+    y: start.y,
     transparent: true,
     frame: false,
     resizable: false,
@@ -298,6 +414,12 @@ app.whenReady().then(() => {
   load(petWin, "pet");
   load(bubbleWin, "bubbles");
   load(panelWin, "panel");
+
+  // Keep the pet reachable when monitors are plugged/unplugged or their work
+  // areas change (dock, taskbar, resolution).
+  screen.on("display-added", keepPetOnScreen);
+  screen.on("display-removed", keepPetOnScreen);
+  screen.on("display-metrics-changed", keepPetOnScreen);
 
   // Bubbles face -> shell: content size (and therefore window size).
   ipcMain.on("cp:bubbles-size", (_e, s) => {
@@ -396,19 +518,15 @@ app.whenReady().then(() => {
     if (!grab) return;
     // a real drag dismisses the panel; a plain click must not
     if (panelOpen && Math.abs(p.x - grab.start.x) + Math.abs(p.y - grab.start.y) > 4) hidePanel();
-    const area = workArea(petWin);
-    const pet = grab.pet;
-    // allow the window to hang off-screen; keep the pet itself inside the work area
-    const minX = area.x - pet.x;
-    const maxX = area.x + area.width - (pet.x + pet.width);
-    const minY = area.y - pet.y;
-    const maxY = area.y + area.height - (pet.y + pet.height);
-    const x = Math.min(Math.max(minX, p.x - grab.dx), maxX);
-    const y = Math.min(Math.max(minY, p.y - grab.dy), maxY);
-    place({ x, y });
+    // The virtual desktop, not the display the pet happens to be on: otherwise
+    // the clamp stops the sprite at the seam and it can never reach monitor 2.
+    const pos = clampPetWindow(p.x - grab.dx, p.y - grab.dy, grab.pet);
+    place(pos);
   });
   ipcMain.on("cp:drag-end", () => {
+    if (!grab) return;
     grab = null;
+    rememberPosition();
   });
 
   const sendFacing = (w) => () => w.webContents.send("cp:facing", config.facing);

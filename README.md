@@ -50,8 +50,9 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
 ### Five things to try first
 
 1. **Click the pet** — the panel opens in its own window next to her; click again to close.
-2. **Drag her** anywhere, including to the very top of the screen. Double-click flips the
-   sprite horizontally.
+2. **Drag her** anywhere — across monitors or to the very top of the screen.
+   Right-click the pet → **Move to display** to park her on another monitor.
+   Double-click flips the sprite horizontally.
 3. **`+`** opens a blank chat in the last used directory (or the server's default).
    Type `/cd /path` to change it, `/model` to pick a model, then send the first message.
 4. **`/` in the composer** lists commands — agent ones (`/init`, `/review`) and pet ones
@@ -127,8 +128,11 @@ red-armoured chibi knight ships in the repo and is installed by default; any `.z
 folder can be imported, switched at runtime and mirrored.
 
 **Placement** — three windows: a fixed-size sprite window, a bubble window sized to the
-stack, and the panel window. Dragging clamps the *sprite*, so she can be parked against
-the top edge.
+stack, and the panel window. Dragging clamps the *sprite* to the virtual desktop, so she
+crosses monitor seams smoothly and can be parked against any edge. The position is saved
+in `petPosition` and restored on the next launch; if a monitor is unplugged, the pet is
+clamped back onto a remaining display. Right-click → **Move to display** parks her at the
+bottom-right of a chosen monitor.
 
 The pet window never resizes: bubbles and the panel live in their own always-on-top
 windows. A bubble appearing/disappearing, or the panel opening, therefore cannot move the
@@ -252,7 +256,7 @@ are **not wired for v2**.
 
 | Path | What |
 | --- | --- |
-| `~/.cute-pets/config.json` | `facing`, `activePet`, attached `servers` (with credentials), `lastDirectory`, `lastModel`, `lastAgent` |
+| `~/.cute-pets/config.json` | `facing`, `activePet`, attached `servers` (with credentials), `lastDirectory`, `lastModel`, `lastAgent`, `petPosition` |
 | `pets/<id>/` (repo) | packs that ship with cute-pets: `chibi-knight` |
 | `~/.cute-pets/pets/<id>/` | installed pet packs (the built-in one is copied here on first run) |
 | `~/.cute-pets/hidden.json` | sessions hidden from the pet |
@@ -267,6 +271,9 @@ Facing is a config value, never inferred from screen position:
 
 `right` (default) is the sprite as authored, `left` is mirrored. Override per launch with
 `npm run shell -- --facing left`.
+
+The pet remembers where it was left as `petPosition` (screen coordinates). It is restored
+only if that spot still overlaps a display; otherwise the pet is clamped back on-screen.
 
 ---
 
