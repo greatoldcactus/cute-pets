@@ -122,9 +122,16 @@ font:inherit;font-size:12px;padding:6px 9px;border-radius:7px;cursor:pointer}
 .ctx button:hover{background:#222736}
 .ctx .sep{height:1px;background:var(--line);margin:4px 6px}
 .ctx .k{float:right;color:var(--dim);font-size:10.5px}
-/* ---- two windows: pet surface and panel surface ---- */
-body.mode-pet .panel, body.mode-pet .mini{display:none!important}
+/* ---- three surfaces: pet, bubbles, panel ---- */
+body.mode-pet .panel, body.mode-pet .mini, body.mode-pet .bubbles{display:none!important}
 body.mode-panel .petzone, body.mode-panel .bubbles, body.mode-panel .tip{display:none!important}
+body.mode-bubbles .petzone, body.mode-bubbles .panel, body.mode-bubbles .mini,
+body.mode-bubbles .tip{display:none!important}
+/* the bubble window is exactly the stack: no room for the tooltip, which the
+   pet window draws through the shell instead */
+body.mode-bubbles .bubbles{position:absolute;right:0;top:0;bottom:auto;left:auto;max-width:250px}
+/* the tooltip lives in the fixed-size pet window, over the sprite */
+body.mode-pet .tip{left:6px;right:6px;top:6px;max-width:none}
 /* the panel window is exactly the panel: fill it, no 560x800 shell around it */
 body.mode-panel .panel{position:absolute;left:0;right:0;top:0;bottom:0;height:auto;display:flex;border-radius:12px}
 body.mode-panel.mini-open .panel{display:none}
@@ -174,9 +181,9 @@ body.mode-panel .mini{left:0;right:0;top:0;bottom:auto;width:auto}
   </section>
 
   <div class="petzone">
-    <div class="bubbles" id="bubbles"></div>
     <canvas id="pet" width="400" height="434"></canvas>
   </div>
+  <div class="bubbles" id="bubbles"></div>
 </div>
 <div class="tip" id="tip"></div>
 <div class="ctx" id="ctx"></div>
@@ -184,17 +191,19 @@ body.mode-panel .mini{left:0;right:0;top:0;bottom:auto;width:auto}
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const api=window.cp||{setIgnore(){},setWindowRect(){},setFacing(){},onFacing(){},onPanel(){},
-  onPanelCommand(){},panel(){},panelSize(){},petMenu(){},bubbleMenu(){},pickFolder:async()=>({ok:false})};
-// One page, two windows: #pet keeps the sprite + bubbles, #panel keeps the UI.
-const SURFACE=(location.hash||"#pet").slice(1)==="panel"?"panel":"pet";
-const IS_PET=SURFACE==="pet";
-document.body.classList.add(IS_PET?"mode-pet":"mode-panel");
+const api=window.cp||{setFacing(){},onFacing(){},onPanel(){},onPanelCommand(){},panel(){},panelSize(){},
+  bubblesSize(){},tooltip(){},onTooltip(){},petMenu(){},bubbleMenu(){},pickFolder:async()=>({ok:false})};
+// One page, three windows: #pet is the sprite, #bubbles the bubble stack, #panel
+// the sessions/chat/settings UI.
+const HASH=(location.hash||"#pet").slice(1);
+const SURFACE=["pet","panel","bubbles"].includes(HASH)?HASH:"pet";
+const IS_PET=SURFACE==="pet", IS_PANEL=SURFACE==="panel", IS_BUBBLES=SURFACE==="bubbles";
+document.body.classList.add("mode-"+SURFACE);
 const B="";
 let state={pet:{state:"idle"},sessions:[],permissions:[],servers:[]};
 let finishedIds=[], prevStates=new Map(), firstRender=false;   // sessions that ended while we were watching
-let expanded=!IS_PET, selected=null, view="chat", filter="all", commands=[], newDir=null, workspaces=[];
-if(!IS_PET) document.body.classList.add("expanded"); // the panel window only exists while open
+let expanded=IS_PANEL, selected=null, view="chat", filter="all", commands=[], newDir=null, workspaces=[];
+if(IS_PANEL) document.body.classList.add("expanded"); // the panel window only exists while open
 
 /* ---------------- sprite ---------------- */
 const FW=192,FH=208,FRAMES=8;
@@ -253,13 +262,12 @@ function petRect(){ return cv.getBoundingClientRect(); }
 // the window can hug the sprite. On the panel surface, closing asks the shell to
 // hide the window; opening is the shell's job.
 function setExpanded(on){
-  if(!IS_PET){ if(!on) api.panel({open:false}); return; }
-  if(on===expanded) return;
+  if(IS_PANEL){ if(!on) api.panel({open:false}); return; }
+  if(!IS_PET||on===expanded) return;
   lastLayout=Date.now();
   expanded=on;
   document.body.classList.toggle("expanded",on);
   document.body.classList.toggle("minimized",!on);
-  syncCollapsedSize();
 }
 function showView(v){ view=v; render(); }
 const currentSession=()=>state.sessions.find(s=>s.id===selected)||null;
@@ -277,7 +285,18 @@ function renderBubbles(){
       <i></i><span>${esc(s.title)}</span></button>`),
     ...done.map(s=>`<button class="bub done" data-session="${esc(s.id)}" title="finished - right-click to hide">
       <i></i><span>&#10003; ${esc(s.title)}</span></button>`)].join("");
-  syncCollapsedSize();
+  syncBubbleSize();
+}
+// The bubble window is sized to its content; the shell does the actual resize.
+let bubbleKey="";
+function syncBubbleSize(){
+  if(!IS_BUBBLES) return;
+  const el=$("#bubbles"), r=el.getBoundingClientRect();
+  const w=Math.ceil(r.width), h=Math.ceil(r.height);
+  const key=`${w}x${h}x${el.children.length}`;
+  if(key===bubbleKey) return;
+  bubbleKey=key;
+  api.bubblesSize({width:w,height:h});
 }
 function renderList(){
   const dirs=[...new Set(state.sessions.map(s=>s.dirName).filter(Boolean))].sort();
@@ -404,12 +423,15 @@ function render(){
   }
   finishedIds=finishedIds.filter(id=>live.has(id));
   petState=(state.pet&&state.pet.state)||"idle";
-  $("#dot").className="dot "+petState;
-  const c=state.pet?.counts||{};
-  $("#psub").textContent=[c.waiting?`${c.waiting} needs you`:"",c.running?`${c.running} working`:"",
-    c.error?`${c.error} error`:"",`${c.idle||0} idle`].filter(Boolean).join(" · ")||"idle";
-  renderBubbles(); renderList(); renderPerms(); renderDetail();
-  if(view==="pets") renderPetsList();
+  if(IS_PANEL){
+    $("#dot").className="dot "+petState;
+    const c=state.pet?.counts||{};
+    $("#psub").textContent=[c.waiting?`${c.waiting} needs you`:"",c.running?`${c.running} working`:"",
+      c.error?`${c.error} error`:"",`${c.idle||0} idle`].filter(Boolean).join(" · ")||"idle";
+    renderList(); renderPerms(); renderDetail();
+    if(view==="pets") renderPetsList();
+  }
+  if(IS_BUBBLES) renderBubbles();
 }
 
 /* ---------------- interactions ---------------- */
@@ -421,7 +443,7 @@ document.addEventListener("click",async e=>{
   if(perm){ try{ await post("/api/permission",{id:perm.dataset.perm,reply:perm.dataset.reply}); }catch(err){} return; }
   const row=e.target.closest("[data-session]");
   if(row){
-    if(IS_PET){ api.panel({open:true,sessionId:row.dataset.session}); return; }
+    if(!IS_PANEL){ api.panel({open:true,sessionId:row.dataset.session}); return; }
     selected=row.dataset.session; msgKey=""; showView("chat"); return;
   }
   const pet=e.target.closest("[data-pet]");
@@ -644,7 +666,7 @@ window.addEventListener("mousemove",e=>{ if(!drag) return;
 window.addEventListener("mouseup",e=>{ if(!drag) return; const moved=drag.moved; drag=null; api.dragEnd();
   // only a real click toggles the panel; ignored when a window move re-synthesises one
   if(IS_PET && moved<4 && e.isTrusted && Date.now()-lastLayout>600) api.panel({open:!expanded});
-  hitTest(e.clientX,e.clientY); syncCollapsedSize(); });
+});
 
 const ctx=$("#ctx");
 function placeMenu(el,x,y){
@@ -695,7 +717,7 @@ function hideCtx(){ ctx.classList.remove("on"); }
 document.addEventListener("contextmenu",e=>{
   const row=e.target.closest("[data-session]"); if(!row) return;
   const s=state.sessions.find(x=>x.id===row.dataset.session); if(!s) return;
-  if(IS_PET){
+  if(!IS_PANEL){
     e.preventDefault();
     api.bubbleMenu({sessionId:s.id,server:s.server,state:s.state});
     return;
@@ -714,77 +736,33 @@ window.addEventListener("keydown",e=>{
   if(e.ctrlKey&&e.key.toLowerCase()==="n"){
     e.preventDefault();
     if(IS_PET) api.panel({open:true,action:"new"});
-    else openMini();
+    else if(IS_PANEL) openMini();
   }
 });
 
-/* ---------------- tooltip on bubbles ---------------- */
+/* ---------------- tooltip: hover in the bubble window, draw in the pet window ---------------- */
 const tip=$("#tip");
+function tipHtml(s){
+  const txt=(s.lastText||"").trim();
+  return `<b>${esc(s.title)}</b><div style="color:var(--dim);margin-top:3px">${esc(s.dirName||"")} · ${esc(s.state)}</div>`
+    + (txt?`<div style="margin-top:5px">${esc(txt.slice(0,160))}${txt.length>160?"…":""}</div>`:"");
+}
 document.addEventListener("mouseover",e=>{
+  if(!IS_BUBBLES) return;
   const b=e.target.closest(".bub"); if(!b) return;
   const s=state.sessions.find(x=>x.id===b.dataset.session); if(!s) return;
-  const txt=(s.lastText||"").trim();
-  tip.innerHTML=`<b>${esc(s.title)}</b><div style="color:var(--dim);margin-top:3px">${esc(s.dirName||"")} · ${esc(s.state)}</div>`
-    + (txt?`<div style="margin-top:5px">${esc(txt.slice(0,160))}${txt.length>160?"…":""}</div>`:"");
-  tip.classList.add("on");
-  const r=b.getBoundingClientRect(), h=tip.offsetHeight;
-  // prefer above the bubble; when the window hugs the bubbles there is no room,
-  // so drop below it instead of covering the bubble the pointer is on
-  let top=r.top-h-8;
-  if(top<6) top=r.bottom+8;
-  top=Math.max(6,Math.min(top, innerHeight-h-6));
-  tip.style.left=Math.max(6,Math.min(r.left, innerWidth-310))+"px";
-  tip.style.top=top+"px";
+  api.tooltip({show:true,html:tipHtml(s)});
 });
-document.addEventListener("mouseout",e=>{ if(e.target.closest(".bub")) tip.classList.remove("on"); });
+document.addEventListener("mouseout",e=>{ if(IS_BUBBLES&&e.target.closest(".bub")) api.tooltip({show:false}); });
+if(api.onTooltip) api.onTooltip(info=>{
+  if(!IS_PET) return;
+  if(!info||!info.show||!info.html){ tip.classList.remove("on"); return; }
+  tip.innerHTML=info.html;
+  tip.classList.add("on");
+});
 
-/* ---------------- passthrough, window size, events, boot ---------------- */
-// Linux: a click-through window cannot take mouse input back (Chromium has no
-// mouse forwarding there), so instead the window shrinks to the pet + bubbles
-// while the panel is closed and grows for the panel. The sprite is anchored by
-// its right/bottom corner, so resizing never moves it on screen.
-const useResize=!!api.useResize;
-const SIZES=api.sizes||{FULL:{width:560,height:800},SMALL:{width:320,height:400}};
-function petAnchor(){
-  const p=document.querySelector(".petzone").getBoundingClientRect();
-  return {right:window.screenX+p.right, top:window.screenY+p.top, bottom:window.screenY+p.bottom};
-}
-function rectFor(anchor,size,flip){
-  return {x:Math.round(anchor.right-size.width),
-          y:Math.round(flip?anchor.top:anchor.bottom-size.height),
-          width:size.width, height:size.height};
-}
-// The collapsed window hugs the pet and whatever bubbles are above it, so there
-// is no transparent band left over to intercept clicks.
-function collapsedHeight(){
-  const z=document.querySelector(".petzone").getBoundingClientRect();
-  const b=$("#bubbles").getBoundingClientRect();
-  return Math.max(230,Math.ceil(z.height+Math.max(0,b.height)+8));
-}
-function collapsedRect(anchor){
-  return rectFor(anchor,{width:SIZES.SMALL.width,height:collapsedHeight()},false);
-}
-let lastCollapsedH=0;
-function syncCollapsedSize(force){
-  if(!IS_PET||!useResize||drag) return;
-  const h=collapsedHeight();
-  if(!force&&Math.abs(h-lastCollapsedH)<2) return;
-  lastCollapsedH=h;
-  api.setWindowRect(collapsedRect(petAnchor()));
-}
-let passthrough=null; // last state sent to the shell (non-Linux)
-function hitTest(x,y){
-  if(!IS_PET||useResize) return;
-  const el=document.elementFromPoint(x,y);
-  // bubbles live above .petzone; include them or they would pass clicks through
-  const next=!(el&&el.closest(".interactive, .panel, .petzone, .bubbles, .bub, .ctx, .tip, .palette, .mini"));
-  if(next===passthrough) return;
-  passthrough=next;
-  api.setIgnore(next);
-}
-if(IS_PET&&!useResize) document.addEventListener("mousemove",e=>{ if(!drag) hitTest(e.clientX,e.clientY); });
-
-// shell -> pet: the panel opened/closed (hide bubbles, re-hug the window)
+/* ---------------- shell <-> surfaces, events, boot ---------------- */
+// shell -> pet: the panel opened/closed (the click toggles it again)
 if(api.onPanel) api.onPanel(s=>{
   if(!IS_PET) return;
   lastLayout=Date.now();
@@ -792,7 +770,7 @@ if(api.onPanel) api.onPanel(s=>{
 });
 // shell -> panel: what to show when the panel window is opened
 if(api.onPanelCommand) api.onPanelCommand(c=>{
-  if(IS_PET) return;
+  if(!IS_PANEL) return;
   expanded=true;
   document.body.classList.add("expanded");
   if(c.action==="new"){ openMini(); return; }
@@ -812,7 +790,7 @@ function connect(){
   const es=new EventSource("/api/events");
   es.addEventListener("state",ev=>{
     state=JSON.parse(ev.data); render();
-    if(expanded&&view==="chat"&&currentSession()) loadMessages(currentSession());
+    if(IS_PANEL&&expanded&&view==="chat"&&currentSession()) loadMessages(currentSession());
   });
   es.onerror=()=>{ es.close(); setTimeout(connect,1500); };
 }

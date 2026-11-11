@@ -12,15 +12,16 @@ into any of them. No tokens spent, no hooks required.
 
 ```
           opencode serve ──HTTP+SSE──▶ brain ──HTTP+SSE──▶ faces
-                 ▲                    (src/)               ├─ pet window   (sprite + bubbles)
-                 └── plugin announce ──┘                   ├─ panel window (sessions, chat)
+                 ▲                    (src/)               ├─ pet window     (sprite)
+                 └── plugin announce ──┘                   ├─ bubbles window (bubble stack)
+                                                           ├─ panel window   (sessions, chat)
                                                            └─ web tray / pet-only
 ```
 
 - **brain** (`src/`, Node 22, zero runtime dependencies) — holds the OpenCode client,
   the state machine, the permission queue, and serves snapshots.
-- **faces** (`electron/`, `faces/web/`) — two thin Electron windows (a sprite window and a
-  panel window) plus a browser session tray. All render the same
+- **faces** (`electron/`, `faces/web/`) — three thin Electron windows (sprite, bubbles,
+  panel) plus a browser session tray. All render the same
   `{pet, sessions, permissions}` snapshot.
 - **plugin** (`plugin/cute-pets.ts`, optional) — tells the brain where a server lives.
 
@@ -88,20 +89,17 @@ and the pet's right-click menu reach the same thing.
 red-armoured chibi knight ships in the repo and is installed by default; any `.zip` or
 folder can be imported, switched at runtime and mirrored.
 
-**Placement** — two windows: one for the sprite and bubbles, one for the panel. Dragging
-clamps the *sprite*, not the panel, so she can be parked against the top edge.
+**Placement** — three windows: a fixed-size sprite window, a bubble window sized to the
+stack, and the panel window. Dragging clamps the *sprite*, so she can be parked against
+the top edge.
 
-The pet window hugs the sprite and the bubbles above it (`320` wide, height measured from
-the stack), so the space around her still belongs to the apps behind. Clicking her opens
-the panel in its own always-on-top window, sized to the room above the sprite (574 px when
-there is space, less when there is not) or placed below her when there is no room. Opening
-or closing the panel never resizes or moves the pet window, so the sprite cannot shift on a
-click. The new-chat popover (`+`) is a short panel window of its own; context menus are
-native menus and never cover her.
-
-On Windows/macOS the pet window is fixed at `320×400` and its unused margin is
-click-through. On Linux XWayland cannot hand mouse input back to a click-through window,
-so there the pet window hugs its content instead and stays fully clickable.
+The pet window never resizes: bubbles and the panel live in their own always-on-top
+windows. A bubble appearing/disappearing, or the panel opening, therefore cannot move the
+sprite — the bubble window changes size on its own, hugging the stack and following her,
+and the panel window is sized to the room above the sprite (574 px when there is space,
+less when there is not) or placed below her when there is none. The new-chat popover (`+`)
+is a short panel window. Context menus are native menus, and the tooltip is drawn in the
+pet window (pointer-transparent) on behalf of the bubble window.
 
 **Hidden sessions** — pet-side only: the session keeps existing (and running) in OpenCode,
 it just stops appearing on the pet. Persisted in `~/.cute-pets/hidden.json`, restorable from
@@ -253,11 +251,11 @@ POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI 
 - OpenCode 2: model switch, agent switch, compact, share, undo/redo are v1-only.
 - Permission replies on v2 use `{action, resources}`; that path has not been exercised
   against a live request.
-- The pet and panel are separate windows. The pet window resizes only when the bubble
-  stack changes; on Windows it stays fixed at `320×400` because resizing a transparent
-  window flickers there.
+- The pet, bubbles and panel are separate windows. The pet window is fixed and never
+  resizes; the bubble window is sized to the stack and the panel window to the room
+  available on screen.
 - Linux/macOS: the Electron shell is portable, but only Windows has been run in anger;
-  click-through and work-area clamping are the platform-specific parts.
+  window stacking and work-area clamping are the platform-specific parts.
 
 ## Development
 
@@ -266,8 +264,8 @@ npm run smoke        # end-to-end: attach, create a session, prompt, read the re
 ```
 
 `npm run shell -- --dev` exposes a control server on `:4290`: `/size`, `/eval?js=…` and
-`/shot?file=…` drive the pet window, `/panel-size`, `/panel-eval?js=…` and
-`/panel-shot?file=…` drive the panel window.
+`/shot?file=…` drive the pet window; `/bubble-…` and `/panel-…` do the same for the
+bubbles and panel windows.
 
 ```
 src/main.mjs        hub: discovery, attach, dispatch, hidden persistence
