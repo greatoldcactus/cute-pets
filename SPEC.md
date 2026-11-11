@@ -185,10 +185,19 @@ AppImage first, deb/rpm later, no Flatpak in v1.
 | `lastDirectory` | absolute path | last directory a chat was created in / moved to; the blank chat starts here |
 | `lastModel` | `{id,providerID,variant}` | last model picked with `/model` (also used for the next blank chat) |
 | `lastAgent` | string | last agent picked with `/agent` |
+| `petPosition` | `{x,y}` | last pet window position in screen coordinates; restored if it still overlaps a display |
 
 Precedence: `--facing` CLI flag → config file → default. Changing facing in the UI
-(double-click) writes the file, so it survives restarts. Window position is also worth
-persisting later; it is desktop-owned state, not a session concern.
+(double-click) writes the file, so it survives restarts. The pet position is written on
+drag end and menu moves; it is desktop-owned state, not a session concern.
+
+Multi-monitor placement uses the union of all display work areas (`screen.getAllDisplays`)
+rather than the display the window currently matches, so the sprite can cross a monitor
+seam. If a diagonal layout leaves a hole, the position snaps to the nearest work area;
+`display-added`/`display-removed`/`display-metrics-changed` re-clamp it. The bubble and
+panel windows use `getDisplayMatching(petWin)` and therefore follow the pet to its
+monitor. Right-click → **Move to display** parks the pet on a chosen display. Native
+Wayland may still refuse programmatic positioning; the shell's XWayland mode is unaffected.
 
 ## 7c. Remote / WSL servers
 
