@@ -922,6 +922,14 @@ $("#prompt").addEventListener("input",e=>{
   }
   closePalette();
 });
+// Tab completes text into the composer; Enter is the action. A model/agent entry
+// has no text to complete, so Tab leaves the list alone there.
+function fillPaletteSelection(){
+  const it=palItems[palSel]; if(!it) return false;
+  if(it.kind==="command"||it.kind==="pet"){ $("#prompt").value=it.label+" "; closePalette(); $("#prompt").focus(); return true; }
+  if(it.kind==="dir"){ $("#prompt").value="/cd "+it.value; closePalette(); $("#prompt").focus(); return true; }
+  return false;
+}
 $("#prompt").addEventListener("keydown",e=>{
   if(!pal.classList.contains("on")) return;
   if(e.key==="ArrowDown"||e.key==="ArrowUp"){
@@ -930,7 +938,8 @@ $("#prompt").addEventListener("keydown",e=>{
     [...pal.children].forEach((el,i)=>el.classList.toggle("sel",i===palSel));
     pal.children[palSel]?.scrollIntoView({block:"nearest"});
   } else if(e.key==="Tab"){
-    e.preventDefault(); choosePalette(palSel);
+    e.preventDefault();
+    fillPaletteSelection(); // no-op for model/agent lists
   } else if(e.key==="Enter"){
     e.preventDefault(); choosePalette(palSel);
   } else if(e.key==="Escape"){ closePalette(); }
