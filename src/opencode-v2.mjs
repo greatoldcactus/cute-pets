@@ -98,6 +98,28 @@ export class OpenCodeV2Client {
     }));
   }
 
+  // Pending agent questions. v2 scopes these to a location: passing a session's
+  // directory returns the forms of every session in it, which is cheaper than one
+  // request per session.
+  async forms(directory = null) {
+    const query = directory ? `?location[directory]=${enc(directory)}` : "";
+    const out = await this.#req(`/api/form${query}`);
+    return (out?.data ?? []).map((f) => ({
+      id: f.id,
+      sessionID: f.sessionID,
+      title: f.title ?? "",
+      fields: f.fields ?? [],
+      metadata: f.metadata ?? null,
+    }));
+  }
+
+  replyForm(sessionId, formId, answer) {
+    return this.#req(`/api/session/${enc(sessionId)}/form/${enc(formId)}/reply`, {
+      method: "POST",
+      body: JSON.stringify({ answer: answer ?? {} }),
+    });
+  }
+
   async messages(id, limit = 20) {
     // Ask for the newest page instead of the whole history: tool inputs/outputs
     // can be large and the chat only needs the tail. The response is newest-first.
@@ -302,6 +324,11 @@ export class OpenCodeV2Client {
           return onEvent({ type: "message.part.updated", properties: { part: { sessionID: sid, type: "text", text: d.text ?? "" } } });
         case "session.status":
           return onEvent({ type: "session.status", properties: { sessionID: sid, status: d.status ?? { type: "idle" } } });
+        case "form.created":
+          return onEvent({ type: "form.created", properties: { form: d.form } });
+        case "form.replied":
+        case "form.cancelled":
+          return onEvent({ type: wrapper.type, properties: { id: d.id, sessionID: d.sessionID } });
         default:
           return undefined;
       }

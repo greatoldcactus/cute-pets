@@ -21,6 +21,7 @@ export class PetState {
     this.servers = new Map(); // url -> {url, directory, online, lastEventAt, error}
     this.hidden = new Map(); // session id -> {id, server, title, at}; pet-side only, never deletes
     this.permissions = new Map(); // permission id -> [key, request]
+    this.forms = new Map(); // form id -> [key, form]
     this.listeners = new Set();
     this.timer = null;
   }
@@ -106,7 +107,7 @@ export class PetState {
       rec.state = STATE.RUNNING;
       rec.detail = null;
     } else if (type === "idle") {
-      rec.state = this.pendingFor(rec.key).length ? STATE.WAITING : STATE.IDLE;
+      rec.state = this.hasPending(rec.key) ? STATE.WAITING : STATE.IDLE;
       rec.detail = null;
     } else if (type === "retry") {
       rec.state = STATE.ERROR;
@@ -127,7 +128,9 @@ export class PetState {
 
   removeSession(server, id) {
     this.sessions.delete(keyOf(server, id));
-    for (const [pid, [key]] of this.permissions) if (key === keyOf(server, id)) this.permissions.delete(pid);
+    const key = keyOf(server, id);
+    for (const [pid, [k]] of this.permissions) if (k === key) this.permissions.delete(pid);
+    for (const [fid, [k]] of this.forms) if (k === key) this.forms.delete(fid);
     this.touch();
   }
 
@@ -173,10 +176,48 @@ export class PetState {
     return out;
   }
 
+  // v2 forms are questions asked by the agent; they wait for an answer just like
+  // permission requests do.
+  replaceForms(server, list) {
+    for (const [fid, [key]] of [...this.forms]) {
+      if (key.startsWith(server + "::")) this.forms.delete(fid);
+    }
+    for (const form of list ?? []) {
+      if (!form?.id || !form.sessionID) continue;
+      this.forms.set(form.id, [keyOf(server, form.sessionID), form]);
+    }
+    this.recomputeWaiting();
+  }
+
+  upsertForm(server, form) {
+    if (!form?.id || !form.sessionID) return;
+    this.forms.set(form.id, [keyOf(server, form.sessionID), form]);
+    this.recomputeWaiting();
+  }
+
+  removeForm(id) {
+    if (!this.forms.delete(id)) return;
+    this.recomputeWaiting();
+  }
+
+  formsFor(key) {
+    const out = [];
+    for (const [fid, [k, form]] of this.forms) {
+      if (k === key) out.push({ id: fid, ...form });
+    }
+    return out;
+  }
+
+  hasPending(key) {
+    if (this.pendingFor(key).length) return true;
+    for (const [, [k]] of this.forms) if (k === key) return true;
+    return false;
+  }
+
   recomputeWaiting() {
     for (const rec of this.sessions.values()) {
-      const pending = this.pendingFor(rec.key);
-      if (pending.length) rec.state = STATE.WAITING;
+      const pending = this.hasPending(rec.key);
+      if (pending) rec.state = STATE.WAITING;
       else if (rec.state === STATE.WAITING) rec.state = STATE.IDLE;
     }
     this.touch();
@@ -186,14 +227,19 @@ export class PetState {
     const counts = { waiting: 0, error: 0, running: 0, idle: 0 };
     for (const s of sessions) counts[s.state] = (counts[s.state] ?? 0) + 1;
     const state = counts.waiting ? "waiting" : counts.error ? "error" : counts.running ? "running" : "idle";
+    // The pet has one body: colour/pose follow the session that drives the rollup
+    // (the urgent one, else the most recently updated).
+    const top = sessions[0];
+    const plan = Boolean(top && top.agent === "plan" && top.state !== "idle");
     const label =
       state === "waiting" ? `${counts.waiting} need${counts.waiting === 1 ? "s" : ""} you`
       : state === "error" ? `${counts.error} failed`
-      : state === "running" ? `${counts.running} working`
+      : state === "running" ? `${counts.running} ${plan ? "planning" : "working"}`
       : sessions.length ? "all done" : "no sessions";
     return {
       state,
-      kind: KIND_OF_STATE[state],
+      plan,
+      kind: plan ? "planning" : KIND_OF_STATE[state],
       label,
       counts,
       total: sessions.length,
@@ -255,6 +301,12 @@ export class PetState {
           permission: p.permission,
           patterns: p.patterns ?? [],
         })),
+        forms: this.formsFor(rec.key).map((f) => ({
+          id: f.id,
+          title: f.title ?? "",
+          fields: f.fields ?? [],
+          metadata: f.metadata ?? null,
+        })),
       }))
       .sort((a, b) => (PRIORITY[b.state] - PRIORITY[a.state]) || (b.updatedAt - a.updatedAt));
 
@@ -281,6 +333,15 @@ export class PetState {
         server: h.server ?? null,
       })),
       permissions,
+      forms: [...this.forms.entries()].map(([id, [key, form]]) => ({
+        id,
+        key,
+        server: key.split("::")[0],
+        sessionID: form.sessionID,
+        title: form.title ?? "",
+        fields: form.fields ?? [],
+        metadata: form.metadata ?? null,
+      })),
     };
   }
 }

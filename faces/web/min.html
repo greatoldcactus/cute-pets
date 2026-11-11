@@ -3,7 +3,7 @@
 <title>cute-pets</title>
 <style>
 :root{--ink:#eceef6;--dim:#98a0b7;--card:#181b24;--card2:#222634;--line:#2c3142;--line2:#3a4258;
---run:#5ac8ff;--wait:#ffc65c;--err:#ff6b6b;--ok:#6ee7a8}
+--run:#5ac8ff;--wait:#ffc65c;--err:#ff6b6b;--ok:#6ee7a8;--plan:#a78bfa}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:transparent;overflow:hidden;
 font:13px/1.45 ui-sans-serif,system-ui,"Segoe UI",sans-serif;color:var(--ink);user-select:none}
@@ -16,6 +16,7 @@ body.expanded .panel{display:flex}
 .panel header{display:flex;align-items:center;gap:9px;padding:9px 11px;border-bottom:1px solid var(--line)}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);flex:none}
 .dot.running{background:var(--run)}.dot.waiting{background:var(--wait)}.dot.error{background:var(--err)}
+.dot.plan{background:var(--plan);box-shadow:0 0 7px rgba(167,139,250,.75)}
 .h1{font-weight:600;font-size:12.5px}
 .h2{font-size:11px;color:var(--dim)}
 header .sp{flex:1}
@@ -38,6 +39,7 @@ border:1px solid var(--line);color:var(--dim);flex:none;margin-top:1px}
 .chip.waiting{color:var(--wait);border-color:#4a3a1a;background:#2a2110}
 .chip.error{color:var(--err);border-color:#4a2020;background:#2a1414}
 .chip.idle{color:var(--ok);border-color:#1d4030;background:#10251c}
+.chip.plan{color:var(--plan);border-color:#3f3168;background:#1d1730}
 .stitle{font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ssub{font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* detail */
@@ -106,6 +108,25 @@ align-items:center;justify-content:center;cursor:pointer;z-index:6;font-size:13p
 .tobottom.on{display:flex}
 .tobottom:hover{border-color:#4b5a7e;color:#fff}
 .empty{color:var(--dim);font-size:11.5px;text-align:center;padding:18px 8px}
+/* v2 forms: the agent is waiting for an answer */
+.formzone{padding:0 11px 8px;display:flex;flex-direction:column;gap:6px;max-height:290px;overflow:auto}
+.formzone:empty{display:none}
+.formcard{border:1px solid #4a3a1a;background:#241d0f;border-radius:9px;padding:7px 9px;display:flex;flex-direction:column;gap:6px}
+.formcard .ft{font-size:11px;font-weight:600;color:var(--wait)}
+.formcard.plan{border-color:#3f3168;background:#191527}
+.formcard.plan .ft{color:var(--plan)}
+.formcard .fdesc{font-size:10px;color:var(--dim);white-space:normal}
+.ffield{display:flex;flex-direction:column;gap:3px}
+.ffield>label{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+.ffield .fhelp{font-size:10px;color:var(--dim);text-transform:none;letter-spacing:0;white-space:normal}
+.ffield input[type=text],.ffield input[type=number],.ffield input[type=email],.ffield input[type=url],
+.ffield input[type=date],.ffield input[type=datetime-local],.ffield select{
+background:var(--card2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:5px 7px;
+font:inherit;font-size:11.5px;min-width:0}
+.fopt{display:flex;align-items:flex-start;gap:6px;font-size:11px;color:var(--ink);cursor:pointer}
+.fopt input{margin:1px 0 0;accent-color:var(--plan);flex:none}
+.fopt a{color:var(--plan);text-decoration:none}.fopt a:hover{text-decoration:underline}
+.dbody.plan .msg.assistant{border-left-color:var(--plan)}
 .field{display:flex;flex-direction:column;gap:6px}
 .field label{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em}
 textarea,input[type=text],select{width:100%;background:var(--card2);color:var(--ink);border:1px solid var(--line);
@@ -150,6 +171,7 @@ align-items:center;justify-content:flex-end;padding-bottom:2px}
 body.expanded .petzone{opacity:.92}
 #pet{cursor:grab;width:200px;height:217px;transform-origin:50% 70%;
 filter:drop-shadow(0 12px 16px rgba(0,0,0,.6));transition:transform .35s cubic-bezier(.3,1.4,.5,1)}
+#pet.plan{filter:drop-shadow(0 0 11px rgba(167,139,250,.6)) drop-shadow(0 12px 16px rgba(0,0,0,.6))}
 #pet.flip{transform:scaleX(-1)}
 #pet:active{cursor:grabbing}
 .bubbles{position:absolute;bottom:222px;right:0;display:flex;flex-direction:column;align-items:flex-end;gap:5px;padding:0 6px;max-width:250px}
@@ -163,6 +185,9 @@ cursor:pointer;box-shadow:0 6px 16px rgba(0,0,0,.45)}
 .bub.done i{background:#6ee7a8}
 .bub.done span{color:#b9c2d6}
 .bub.waiting i{background:var(--wait)}.bub.running i{background:var(--run)}.bub.error i{background:var(--err)}
+.bub.plan i{background:var(--plan)}
+.bub.done.plan{border-color:#3f3168;opacity:.95}
+.bub.done.plan span{color:#d9cffb}
 .bub span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* tooltip + context menu */
 .tip{position:fixed;max-width:300px;background:#12151c;border:1px solid var(--line2);border-radius:9px;
@@ -217,6 +242,7 @@ body.mode-panel .mini{left:0;right:0;top:0;bottom:auto;width:auto}
           <span class="ssub" id="dmeta" style="flex:none"></span>
           <button class="pbtn" id="dabort" style="display:none">stop</button></div>
         <div class="dbody" id="dbody"></div>
+        <div class="formzone" id="formzone"></div>
         <button class="tobottom" id="toBottom" title="Jump to latest" type="button">&#8595;</button>
       </section>
     </div>
@@ -259,7 +285,7 @@ const SURFACE=["pet","panel","bubbles"].includes(HASH)?HASH:"pet";
 const IS_PET=SURFACE==="pet", IS_PANEL=SURFACE==="panel", IS_BUBBLES=SURFACE==="bubbles";
 document.body.classList.add("mode-"+SURFACE);
 const B="";
-let state={pet:{state:"idle"},sessions:[],permissions:[],servers:[]};
+let state={pet:{state:"idle"},sessions:[],permissions:[],forms:[],servers:[]};
 let finishedIds=[], prevStates=new Map(), firstRender=false;   // sessions that ended while we were watching
 let expanded=IS_PANEL, selected=null, view="chat", filter="all", commands=[], newDir=null, workspaces=[];
 let draft=null, defaults=null; // a new chat before its first message
@@ -267,8 +293,12 @@ if(IS_PANEL) document.body.classList.add("expanded"); // the panel window only e
 
 /* ---------------- sprite ---------------- */
 const FW=192,FH=208,FRAMES=8;
-const ROW={idle:0,running:2,waiting:6,error:9};
-const FPS={idle:6,running:11,waiting:5,error:4};
+// Codex V2 defaults: 0 idle, 2 running-left, 5 failed, 6 waiting, 8 review.
+// A pack may override these with pet.json "rows" (the built-in chibi-knight does,
+// because its sheet repurposes row 9 as the error pose).
+const DEFAULT_ROW={idle:0,running:2,waiting:6,error:5,plan:8};
+let ROW={...DEFAULT_ROW};
+const FPS={idle:6,running:11,waiting:5,error:4,plan:5};
 const img=new Image(), cv=$("#pet"), ctx2=cv.getContext("2d");
 const valid={}; let petState="idle", facing="right", petKey="";
 function measure(){
@@ -302,6 +332,7 @@ async function loadPet(){
       $("#petname").textContent=p.name||"pet";
       document.title=p.name||"cute-pets";
     }
+    ROW=p.rows?{...DEFAULT_ROW,...p.rows}:{...DEFAULT_ROW};
   }catch{}
 }
 function applyFacing(){ cv.classList.toggle("flip", facing==="left"); }
@@ -357,10 +388,10 @@ function renderBubbles(){
   const shown=new Set(act.map(s=>s.id));
   const done=finishedIds.map(id=>state.sessions.find(s=>s.id===id))
     .filter(s=>s&&!shown.has(s.id)).slice(0,2);
-  $("#bubbles").innerHTML=[...act.map(s=>`<button class="bub ${s.state}" data-session="${esc(s.id)}">
-      <i></i><span>${esc(s.title)}</span></button>`),
-    ...done.map(s=>`<button class="bub done" data-session="${esc(s.id)}" title="finished - right-click to hide">
-      <i></i><span>&#10003; ${esc(s.title)}</span></button>`)].join("");
+  $("#bubbles").innerHTML=[...act.map(s=>`<button class="bub ${s.state}${s.agent==="plan"?" plan":""}" data-session="${esc(s.id)}">
+      <i></i><span>${s.agent==="plan"?"&#10022; ":""}${esc(s.title)}</span></button>`),
+    ...done.map(s=>`<button class="bub done${s.agent==="plan"?" plan":""}" data-session="${esc(s.id)}" title="finished - right-click to hide">
+      <i></i><span>${s.agent==="plan"?"&#10022; plan ready · ":"&#10003; "}${esc(s.title)}</span></button>`)].join("");
   syncBubbleSize();
 }
 // The bubble window is sized to its content; the shell does the actual resize.
@@ -386,7 +417,7 @@ function renderList(){
   const list=state.sessions.filter(s=>sel.value==="all"||s.dirName===sel.value);
   $("#sessions").innerHTML=list.length?list.map(s=>`
     <div class="srow ${s.id===selected?"sel":""}" data-session="${esc(s.id)}">
-      <span class="chip ${s.state}">${s.state}</span>
+      <span class="chip ${s.state}${s.agent==="plan"?" plan":""}">${s.agent==="plan"&&s.state==="running"?"plan":s.agent==="plan"&&s.state==="waiting"?"answer":s.state}</span>
       <div style="min-width:0;flex:1">
         <div class="stitle">${esc(s.title)}</div>
         <div class="ssub">${esc(s.dirName||"")}${s.lastText?" · "+esc(s.lastText.slice(0,42)):""}</div>
@@ -407,16 +438,18 @@ function renderPerms(){
 function renderDetail(){
   const s=currentSession();
   const d = view==="chat" && !s ? draft : null;
-  $("#dstate").className="chip "+(s?s.state:"idle");
-  $("#dstate").textContent=s?s.state:(d?"new":"idle");
+  const isPlan=Boolean(s&&s.agent==="plan");
+  $("#dstate").className="chip "+(s?s.state:"idle")+(isPlan?" plan":"");
+  $("#dstate").textContent=s?(isPlan&&s.state==="running"?"plan":isPlan&&s.state==="waiting"?"plan · answer":s.state):(d?"new":"idle");
   $("#dtitle").textContent = view==="new" ? "New chat"
     : view==="pets" ? "Pets" : view==="settings" ? "Settings"
-    : d ? "New chat" : s?s.title:"Nothing selected";
+    : d ? "New chat" : s?(isPlan?"✦ ":"")+s.title:"Nothing selected";
   $("#dabort").style.display = s&&s.state==="running" ? "" : "none";
   const dirName = d?.directory ? d.directory.split(/[\\/]/).filter(Boolean).pop() : "";
   $("#dmeta").textContent = s ? [s.model?.id, s.agent].filter(Boolean).join(" · ")
     : d ? [dirName || "no folder", d.model?.id || "default model", d.agent].filter(Boolean).join(" · ") : "";
   const body=$("#dbody");
+  body.classList.toggle("plan",isPlan);
   if(view!=="chat"){ msgSession=""; msgKey=""; }
   if(view==="new"){ body.innerHTML=newChatHtml(); updateToBottom(); return; }
   if(view==="pets"){ body.innerHTML=petsHtml(); updateToBottom(); return; }
@@ -629,6 +662,169 @@ async function renderPetsList(){
     ||`<div class="empty">no pets imported</div>`;
 }
 
+/* ---------------- v2 forms (questions the agent waits on) ---------------- */
+let formDrafts={}, formSig="";
+const cssEsc=s=>window.CSS?.escape?CSS.escape(String(s)):String(s).replace(/["\\]/g,"\\$&");
+function formValues(fid){ return formDrafts[fid]||(formDrafts[fid]={}); }
+function seedDefaults(form,vals){
+  for(const x of form.fields||[]){
+    if(x.hidden||x.type==="external"||x.key in vals) continue;
+    if(x.default!==undefined) vals[x.key]=x.default;
+    else if(x.type==="boolean"&&x.required) vals[x.key]=false;
+    else if(x.type==="multiselect") vals[x.key]=[];
+  }
+}
+function condMet(field,vals){
+  const when=field.when;
+  if(!when?.length) return true;
+  return when.every(w=>{
+    const v=vals[w.key];
+    const same=(Array.isArray(v)||Array.isArray(w.value))
+      ? JSON.stringify(v??null)===JSON.stringify(w.value??null)
+      : v===w.value;
+    return w.op==="neq"?!same:same;
+  });
+}
+function findField(formId,key){
+  const s=currentSession();
+  const form=(s?.forms||[]).find(f=>f.id===formId);
+  return (form?.fields||[]).find(x=>x.key===key)||null;
+}
+function inputType(field){
+  return field.format==="email"?"email":field.format==="uri"?"url"
+    :field.format==="date"?"date":field.format==="date-time"?"datetime-local":"text";
+}
+function formFieldHtml(formId,field,vals){
+  const key=field.key, fid=esc(formId), fk=esc(key), title=field.title||key;
+  const common=`data-form="${fid}" data-fk="${fk}"`;
+  const desc=field.description?`<div class="fhelp">${esc(field.description)}</div>`:"";
+  const label=esc(title)+(field.required?` <span style="color:var(--plan)">*</span>`:"");
+  const v=vals[key];
+  if(field.type==="external"){
+    const url=/^https?:\/\//i.test(String(field.url||""))?field.url:"#";
+    return `<div class="ffield"><label class="fopt"><input type="checkbox" ${common} ${v===true?"checked":""}>
+        <span>Open <a href="${esc(url)}" target="_blank" rel="noreferrer">${label}</a></span></label>${desc}</div>`;
+  }
+  if(field.type==="boolean"){
+    return `<div class="ffield"><label class="fopt"><input type="checkbox" ${common} ${v===true?"checked":""}>
+        <span>${label}</span></label>${desc}</div>`;
+  }
+  if(field.type==="multiselect"){
+    const picked=Array.isArray(v)?v:[];
+    return `<div class="ffield"><label>${label}</label>${desc}
+      ${(field.options||[]).map(o=>`<label class="fopt"><input type="checkbox" ${common} value="${esc(o.value)}" ${picked.includes(o.value)?"checked":""}>
+        <span>${esc(o.label||o.value)}${o.description?` <span class="fhelp">${esc(o.description)}</span>`:""}</span></label>`).join("")}</div>`;
+  }
+  if(field.type==="string"&&(field.options||[]).length&&!field.custom){
+    return `<div class="ffield"><label>${label}</label>${desc}
+      <select ${common}>
+        ${field.required?"":`<option value="">(none)</option>`}
+        ${(field.options||[]).map(o=>`<option value="${esc(o.value)}" ${v===o.value?"selected":""}>${esc(o.label||o.value)}</option>`).join("")}
+      </select></div>`;
+  }
+  if(field.type==="number"||field.type==="integer"){
+    const min=field.minimum!==undefined?` min="${esc(field.minimum)}"`:"";
+    const max=field.maximum!==undefined?` max="${esc(field.maximum)}"`:"";
+    const step=field.type==="integer"?' step="1"':' step="any"';
+    return `<div class="ffield"><label>${label}</label>${desc}
+      <input type="number" ${common} value="${v===undefined?"":esc(v)}"${min}${max}${step}></div>`;
+  }
+  const opts=(field.options||[]).length;
+  const list=opts?` list="dl-${fid}-${fk}"`:"";
+  const datalist=opts?`<datalist id="dl-${fid}-${fk}">${field.options.map(o=>`<option value="${esc(o.value)}">${esc(o.label||o.value)}</option>`).join("")}</datalist>`:"";
+  const extra=(field.minLength!==undefined?` minlength="${esc(field.minLength)}"`:"")
+    +(field.maxLength!==undefined?` maxlength="${esc(field.maxLength)}"`:"")
+    +(field.pattern?` pattern="${esc(field.pattern)}"`:"");
+  return `<div class="ffield"><label>${label}</label>${desc}
+    <input type="${inputType(field)}" ${common}${list} value="${v===undefined?"":esc(v)}"
+      placeholder="${esc(field.placeholder||"")}"${extra} autocomplete="off">${datalist}</div>`;
+}
+function formHtml(form){
+  const vals=formValues(form.id);
+  seedDefaults(form,vals);
+  const fields=(form.fields||[]).filter(x=>!x.hidden&&condMet(x,vals));
+  const plan=currentSession()?.agent==="plan";
+  return `<div class="formcard${plan?" plan":""}" data-formcard="${esc(form.id)}">
+    <div class="ft">&#10022; ${esc(form.title||"The agent has a question")}</div>
+    ${fields.map(x=>formFieldHtml(form.id,x,vals)).join("")}
+    <div class="btnrow"><button class="pbtn ok" data-form-send="${esc(form.id)}">Answer</button></div>
+  </div>`;
+}
+function renderForms(force=false){
+  const s=currentSession();
+  const forms=(s?.forms)||[];
+  const sig=s?s.id+"|"+JSON.stringify(forms.map(f=>[f.id,f.title,f.fields])):"";
+  if(!force&&sig===formSig) return;
+  formSig=sig;
+  const z=$("#formzone"); if(!z) return;
+  for(const id of Object.keys(formDrafts)) if(!forms.some(f=>f.id===id)) delete formDrafts[id];
+  const active=document.activeElement;
+  const aform=active?.dataset?.form, akey=active?.dataset?.fk;
+  const caret=active?.selectionStart;
+  z.innerHTML=forms.map(formHtml).join("");
+  if(aform&&akey&&z.contains(document.activeElement)===false){
+    const el=z.querySelector(`[data-form="${cssEsc(aform)}"][data-fk="${cssEsc(akey)}"]`);
+    if(el){ el.focus(); try{ if(caret!=null&&el.setSelectionRange) el.setSelectionRange(caret,caret); }catch{} }
+  }
+}
+function storeFormField(el){
+  const fid=el.dataset.form, key=el.dataset.fk;
+  const field=findField(fid,key); if(!field) return;
+  const vals=formValues(fid);
+  if(field.type==="boolean"||field.type==="external") vals[key]=el.checked;
+  else if(field.type==="multiselect"){
+    vals[key]=[...document.querySelectorAll(`input[data-form="${cssEsc(fid)}"][data-fk="${cssEsc(key)}"]:checked`)].map(x=>x.value);
+  } else if(field.type==="number"||field.type==="integer"){
+    vals[key]=el.value.trim()===""?undefined:Number(el.value);
+  } else vals[key]=el.value;
+}
+async function sendForm(formId){
+  const s=currentSession(); if(!s) return;
+  const form=(s.forms||[]).find(f=>f.id===formId); if(!form) return;
+  const vals=formDrafts[formId]||{};
+  const answer={};
+  for(const x of form.fields||[]){
+    if(x.hidden){ if(x.default!==undefined) answer[x.key]=x.default; continue; }
+    if(!condMet(x,vals)) continue;
+    const v=vals[x.key]===undefined?x.default:vals[x.key];
+    if(x.type==="external"){
+      if(v!==true){ alert(`Please acknowledge "${x.title||x.url}" before answering.`); return; }
+      answer[x.key]=true;
+      continue;
+    }
+    if(x.type==="multiselect"){
+      const arr=Array.isArray(v)?v:[];
+      if(x.required&&!arr.length){ alert(`"${x.title||x.key}" is required.`); return; }
+      answer[x.key]=arr;
+      continue;
+    }
+    if(v===undefined||v===""){
+      if(x.type==="boolean"&&x.required){ answer[x.key]=false; continue; }
+      if(x.required){ alert(`"${x.title||x.key}" is required.`); return; }
+      continue;
+    }
+    if(x.type==="number"||x.type==="integer"){
+      const n=Number(v);
+      if(Number.isNaN(n)){ alert(`"${x.title||x.key}" must be a number.`); return; }
+      answer[x.key]=n;
+      continue;
+    }
+    answer[x.key]=v;
+  }
+  try{
+    await post("/api/form",{server:s.server,sessionId:s.id,formId,answer});
+    s.forms=(s.forms||[]).filter(x=>x.id!==formId);
+    if(state.forms) state.forms=state.forms.filter(x=>x.id!==formId);
+    delete formDrafts[formId];
+    formSig=""; renderForms(true);
+  }catch(e){ alert(String(e)); }
+}
+$("#formzone").addEventListener("input",e=>{ const el=e.target.closest("[data-fk]"); if(el) storeFormField(el); });
+$("#formzone").addEventListener("change",e=>{
+  const el=e.target.closest("[data-fk]"); if(!el) return;
+  storeFormField(el); renderForms(true); // `when` conditions may reveal other fields
+});
+
 function render(){
   // remember what just finished: running/waiting/error -> idle
   const live=new Set(state.sessions.map(s=>s.id));
@@ -646,13 +842,18 @@ function render(){
     finishedIds=[...new Set([...finishedIds,...recent])].slice(0,4);
   }
   finishedIds=finishedIds.filter(id=>live.has(id));
+  const plan=Boolean(state.pet?.plan);
   petState=(state.pet&&state.pet.state)||"idle";
+  // Plan mode has its own pose while it works; a question/error keeps the pose
+  // that tells you it needs attention, but the violet aura stays.
+  if(plan&&petState==="running") petState="plan";
+  cv.classList.toggle("plan",plan);
   if(IS_PANEL){
-    $("#dot").className="dot "+petState;
+    $("#dot").className="dot "+petState+(plan&&petState!=="plan"&&petState!=="waiting"&&petState!=="error"?" plan":"");
     const c=state.pet?.counts||{};
-    $("#psub").textContent=[c.waiting?`${c.waiting} needs you`:"",c.running?`${c.running} working`:"",
+    $("#psub").textContent=[plan?"planning":"",c.waiting?`${c.waiting} needs you`:"",c.running?`${c.running} working`:"",
       c.error?`${c.error} error`:"",`${c.idle||0} idle`].filter(Boolean).join(" · ")||"idle";
-    renderList(); renderPerms(); renderDetail();
+    renderList(); renderPerms(); renderDetail(); renderForms();
     if(view==="pets") renderPetsList();
   }
   if(IS_BUBBLES) renderBubbles();
@@ -665,6 +866,8 @@ document.addEventListener("click",async e=>{
     showView("settings"); return; }
   const perm=e.target.closest("[data-perm]");
   if(perm){ try{ await post("/api/permission",{id:perm.dataset.perm,reply:perm.dataset.reply}); }catch(err){} return; }
+  const send=e.target.closest("[data-form-send]");
+  if(send){ await sendForm(send.dataset.formSend); return; }
   const row=e.target.closest("[data-session]");
   if(row){
     if(!IS_PANEL){ api.panel({open:true,sessionId:row.dataset.session}); return; }
@@ -736,6 +939,8 @@ const PET_CMDS=[
   {name:"cd",       d:"change the working directory",       run:()=>{ $("#prompt").value="/cd "; openDirPalette(); $("#prompt").focus(); }},
   {name:"model",    d:"switch the model for this session",  pick:"model"},
   {name:"agent",    d:"switch agent (build, plan, explore)",pick:"agent"},
+  {name:"plan",     d:"switch to plan mode (read-only)",    run:()=>useAgent("plan")},
+  {name:"build",    d:"switch back to the build agent",     run:()=>useAgent("build")},
   {name:"compact",  d:"summarize this conversation",        act:"compact"},
   {name:"undo",     d:"revert the last message",            act:"undo"},
   {name:"redo",     d:"restore reverted messages",          act:"redo"},
@@ -875,6 +1080,23 @@ async function runAction(act){
     if(act==="fork"){ await forkSession(s); return; }
     const r=await post("/api/session/action",{server:s.server,sessionId:s.id,action:act});
     if(act==="share"&&r.url){ try{ await navigator.clipboard.writeText(r.url); alert("Share link copied:\n"+r.url); }catch{ alert("Share link:\n"+r.url); } }
+  }catch(e){ alert(String(e)); }
+}
+
+// /plan and /build: set the agent on the selected session or the draft.
+async function useAgent(name){
+  const s=currentSession();
+  if(!s){
+    if(!draft) startDraft();
+    draft.agent=name;
+    if(defaults) defaults.agent=name;
+    render();
+    return;
+  }
+  try{
+    await post("/api/session/action",{server:s.server,sessionId:s.id,action:"agent",value:name});
+    if(defaults) defaults.agent=name;
+    msgKey=""; render();
   }catch(e){ alert(String(e)); }
 }
 

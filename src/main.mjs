@@ -325,6 +325,16 @@ class Hub {
       if (statuses?.[info.id]) this.store.setStatus(url, info.id, statuses[info.id]);
     }
     this.store.replacePermissions(url, permissions ?? []);
+    if (typeof client.forms === "function") {
+      // Forms are scoped to a location, so one request per known directory (not
+      // per session). v2 usually serves a single directory, so this is one call.
+      const dirs = [...new Set((sessions ?? []).map((s) => s.directory).filter(Boolean))];
+      if (!dirs.length) dirs.push(null);
+      const lists = await Promise.all(dirs.map((dir) => client.forms(dir).catch(() => [])));
+      const byId = new Map();
+      for (const list of lists) for (const form of list ?? []) if (form?.id) byId.set(form.id, form);
+      this.store.replaceForms(url, [...byId.values()]);
+    }
   }
 
   #refreshPermissions(url) {
@@ -368,6 +378,25 @@ class Hub {
         break;
       case "message.part.delta":
         if (p.sessionID) this.store.noteDelta(url, p.sessionID, p.delta);
+        break;
+      case "form.created":
+        if (p.form?.id && p.form?.sessionID) {
+          this.store.upsertSession(url, { id: p.form.sessionID });
+          this.store.upsertForm(url, p.form);
+          // A form can arrive for a session the store has only seen by id (or not
+          // at all); fetch its title/agent so the card is coloured correctly.
+          const entry = this.clients.get(url);
+          if (entry?.client?.getSession) {
+            void entry.client
+              .getSession(p.form.sessionID)
+              .then((info) => { if (info) this.store.upsertSession(url, info); })
+              .catch(() => {});
+          }
+        }
+        break;
+      case "form.replied":
+      case "form.cancelled":
+        if (p.id) this.store.removeForm(p.id);
         break;
       default:
         if (typeof ev?.type === "string" && ev.type.startsWith("permission.")) {
@@ -705,6 +734,17 @@ class Hub {
     await entry.client.replyPermission(request ?? id, reply);
     this.store.removePermission(id);
     this.#refreshPermissions(url);
+    return { ok: true };
+  }
+
+  async replyForm({ server, sessionId, formId, answer }) {
+    const found = this.store.forms.get(formId);
+    const url = found ? found[0].split("::")[0] : this.pickServer(server);
+    const entry = url && this.clients.get(url);
+    if (!entry || !sessionId || !formId) throw new Error("server, sessionId and formId required");
+    if (typeof entry.client.replyForm !== "function") throw new Error("forms need OpenCode 2");
+    await entry.client.replyForm(sessionId, formId, answer);
+    this.store.removeForm(formId);
     return { ok: true };
   }
 
