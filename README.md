@@ -84,7 +84,10 @@ Answered from the pet, the TUI never has to be found.
 
 **Chat** — type into any session from the panel, or start a new one. A folder without a
 running server gets its own `opencode serve` (Windows paths only — a Linux path must be an
-attached WSL server, and the brain says so instead of guessing).
+attached WSL server, and the brain says so instead of guessing). Messages render markdown:
+headings, lists, tables, links, inline code, and fenced code blocks with a language label
+and a copy button. Rendering is local and dependency-free, and everything is HTML-escaped
+before markup is added.
 
 **New chat popover** — prompt, folder, start; four lines instead of a full panel. `Ctrl+N`
 and the pet's right-click menu reach the same thing.
