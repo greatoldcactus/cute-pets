@@ -22,14 +22,16 @@ of a local HTTP server — so a pet can be an equal peer instead of a notificati
 
 ```
 opencode serve ──HTTP + SSE──▶ brain (src/) ──HTTP + SSE──▶ faces
-      ▲                            │                        ├─ faces/web     (exists)
-      └──── plugin announce ───────┘                        └─ faces/electron (planned)
+      ▲                            │                        ├─ faces/web
+      └──── plugin announce ───────┘                        ├─ pet window   (sprite + bubbles)
+                                                            └─ panel window (sessions + chat)
 ```
 
 - **Brain** (`src/`): no UI, no model logic. Holds the OpenCode client, the session/state
   machine, the permission queue, and serves snapshots to faces. Node 22+, zero deps.
-- **Faces**: render `{pet, sessions, permissions}` and post commands back. Web face today;
-  Electron pet window later. Same contract, so a platform problem never blocks features.
+- **Faces**: render `{pet, sessions, permissions}` and post commands back. The Electron
+  shell is two windows (pet, panel) sharing one page by `#pet`/`#panel`; the web face is a
+  third surface. Same contract, so a platform problem never blocks features.
 - **Plugin** (`plugin/cute-pets.ts`): announces where a server lives. Optional — the brain
   also discovers servers by scanning listening ports of `opencode` processes.
 
@@ -115,11 +117,21 @@ base frames 192×208, OpenPets-style activity strips (`activities/<id>.webp`, 4�
 | | Windows | Linux X11 | Linux Wayland (native) | Linux Wayland (XWayland) |
 | --- | --- | --- | --- | --- |
 | transparent frameless | ✓ | ✓ | ✓ | ✓ |
-| click-through | ✓ | ✓ (Electron ≥43) | ✓ (Electron ≥43; before that a no-op) | ✓ |
+| click-through | ✓ (pet margin) | ✗ see note | ✗ see note | ✗ see note |
 | drag pet | ✓ | ✓ | ✓ (draggable regions) | ✓ |
 | park at position | ✓ | ✓ | ✗ `setPosition` unsupported | ✓ |
 | always on top | ✓ | ✓ | ✗ `alwaysOnTop` unsupported | ✓ (compositor honors `_NET_WM_STATE_ABOVE`) |
 | global hotkey | ✓ | mostly | portal-restricted | same |
+
+Linux click-through note: `IgnoreMouseEventsOptions.forward` is Windows/macOS only, and
+XWayland derives a surface's input region from the X input shape. Electron's
+`setIgnoreMouseEvents(true)` empties that shape, and nothing can restore it from the page
+once it is empty. The Electron shell therefore keeps the pet window input-enabled on Linux
+and hugs its content instead (width `320`, height measured from the bubble stack). The
+session panel is a separate window: it is sized and placed from the room above/below the
+sprite when it opens, so opening it never resizes or moves the pet window. Anything outside
+either window is click-through simply because there is no window there. On Windows/macOS
+the pet window stays `320×400` and its unused margin is click-through via ignore+forward.
 
 Plan: one Electron binary (≥43). On Linux, detect `XDG_SESSION_TYPE=wayland` and default
 to `--ozone-platform=x11` so the pet can be parked and pinned; offer `--ozone-platform=wayland`
