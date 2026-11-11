@@ -6,7 +6,7 @@
 // The sprite window never changes size, so nothing can make the pet jump when a
 // bubble appears/disappears or when the panel opens.
 // Usage: npx electron electron/main.cjs [--dev]
-const { app, BrowserWindow, ipcMain, screen, dialog, Menu } = require("electron");
+const { app, BrowserWindow, ipcMain, screen, dialog, Menu, clipboard } = require("electron");
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -449,6 +449,12 @@ app.whenReady().then(() => {
   ipcMain.on("cp:pet-menu", () => petMenu());
   ipcMain.on("cp:bubble-menu", (_e, info) => bubbleMenu(info));
   ipcMain.on("cp:quit", () => app.quit());
+  // The renderer's clipboard API needs document focus; the main-process clipboard
+  // works even when the panel was clicked while another window was focused.
+  ipcMain.handle("cp:clipboard-write", (_e, text) => {
+    clipboard.writeText(String(text ?? ""));
+    return true;
+  });
 
   // Import a pet pack (.zip file or a folder) through a native dialog, then let
   // the brain copy it into ~/.cute-pets/pets/<id>/.
