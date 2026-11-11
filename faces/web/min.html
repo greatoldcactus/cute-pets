@@ -72,6 +72,8 @@ text-transform:none;letter-spacing:0;cursor:pointer;padding:1px 4px;border-radiu
 .msg th{background:#1b202b}.msg del{color:var(--dim)}
 /* collapsed tool / thinking / error trace */
 .msg .trace{margin-top:6px;border-top:1px dashed var(--line);padding-top:5px}
+.msg .trace.above{margin-top:0;margin-bottom:6px;padding-top:0;padding-bottom:5px;
+border-top:0;border-bottom:1px dashed var(--line)}
 .msg .trace>summary{cursor:pointer;color:var(--dim);font-size:10px;list-style:none;
 display:flex;align-items:center;gap:5px;user-select:none}
 .msg .trace>summary::-webkit-details-marker{display:none}
@@ -444,7 +446,7 @@ function renderPart(p,mid,i){
   if(p.type==="file") return `<div class="tlabel">file · ${esc(p.name||p.path||"file")}</div>`;
   return "";
 }
-function messageTrace(m,mid){
+function messageTrace(m,mid,above){
   const extras=(m.parts||[]).filter(p=>p.type!=="text");
   if(!extras.length) return "";
   const tools=extras.filter(p=>p.type==="tool");
@@ -457,15 +459,23 @@ function messageTrace(m,mid){
   if(nFile) bits.push(`${nFile} file${nFile>1?"s":""}`);
   if(nSys) bits.push(`${nSys} system`);
   const hasErr=tools.some(t=>/error|failed/i.test(String(t.status)));
-  return `<details class="trace" data-k="${esc(mid)}:trace">`+
+  return `<details class="trace${above?" above":""}" data-k="${esc(mid)}:trace">`+
     `<summary class="${hasErr?"has-error":""}">${esc(bits.join(" · "))||"trace"}</summary>`+
     `<div class="tracebody">${extras.map((p,i)=>renderPart(p,mid,i)).join("")}</div></details>`;
 }
 function renderMessage(m){
   const mid=m.id||`m${Math.random().toString(36).slice(2)}`;
-  const text=(m.parts||[]).filter(p=>p.type==="text"&&p.text).map(p=>p.text).join("\n\n");
+  const parts=m.parts||[];
+  const text=parts.filter(p=>p.type==="text"&&p.text).map(p=>p.text).join("\n\n");
   const role=m.role==="user"?"user":"assistant";
-  return `<div class="msg ${role}">${text?CPMarkdown.toHtml(text):""}${messageError(m.error)}${messageTrace(m,mid)}</div>`;
+  // Keep the real order: a message is [reasoning, text] (thinking before the
+  // answer), not text followed by its thinking. Only move the trace below when
+  // it actually came after the text.
+  const firstText=parts.findIndex(p=>p.type==="text"&&p.text);
+  const firstExtra=parts.findIndex(p=>p.type!=="text");
+  const above=firstExtra>=0 && (firstText<0 || firstExtra<firstText);
+  const trace=messageTrace(m,mid,above);
+  return `<div class="msg ${role}">${above?trace:""}${text?CPMarkdown.toHtml(text):""}${messageError(m.error)}${above?"":trace}</div>`;
 }
 // Consecutive assistant steps with no answer text are one process run. Collapsing
 // them into a single trace keeps a turn readable: one "N steps · M tools" line
