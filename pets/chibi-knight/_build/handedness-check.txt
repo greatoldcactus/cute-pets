@@ -1,0 +1,29 @@
+Sheet: (1536, 2288) RGBA
+Gold test: y in [90,170); exclude x in [85,107); r>185, 110<g<200, b<115, alpha>0.
+row 0: R R R R R R R R
+  [L,R]: [[189, 439], [189, 439], [191, 439], [191, 439], [193, 439], [212, 523], [191, 439], [189, 439]]
+row 2: R R R R R R R R
+  [L,R]: [[336, 543], [339, 545], [183, 428], [181, 428], [279, 522], [280, 528], [145, 466], [145, 464]]
+row 6: R R R R R R R R
+  [L,R]: [[206, 465], [202, 465], [191, 439], [191, 439], [154, 380], [159, 380], [159, 380], [189, 439]]
+row 0 nonempty alpha counts: [12396, 12363, 12363, 12396, 12396, 12225, 12396, 12396]
+row 2 nonempty alpha counts: [14766, 14766, 12121, 12121, 14629, 14629, 12525, 12525]
+row 6 nonempty alpha counts: [11196, 11160, 12396, 12396, 10938, 10974, 10974, 12396]
+row 9 nonempty alpha counts: [11390, 11390, 11390, 11390, 11390, 11390, 11390, 11390]
+SHA-256 over decoded RGBA row bands (before -> after):
+row 0: 5a4bf253cfa79674257579d528e720b7e654d1707d1caa57dfd5a889a739713a -> 5a4bf253cfa79674257579d528e720b7e654d1707d1caa57dfd5a889a739713a MATCH
+row 4: 5af50aba3fadac326253811eba70965ef8c6254c2a8f519f0184ea2f7d2d4125 -> 5af50aba3fadac326253811eba70965ef8c6254c2a8f519f0184ea2f7d2d4125 MATCH
+row 6: 5af50aba3fadac326253811eba70965ef8c6254c2a8f519f0184ea2f7d2d4125 -> 5af50aba3fadac326253811eba70965ef8c6254c2a8f519f0184ea2f7d2d4125 MATCH
+row 7: 5af50aba3fadac326253811eba70965ef8c6254c2a8f519f0184ea2f7d2d4125 -> 5af50aba3fadac326253811eba70965ef8c6254c2a8f519f0184ea2f7d2d4125 MATCH
+row 8: 5a4bf253cfa79674257579d528e720b7e654d1707d1caa57dfd5a889a739713a -> 5a4bf253cfa79674257579d528e720b7e654d1707d1caa57dfd5a889a739713a MATCH
+row 9: e3245718594dd7d833bd4eb10ca9f5415b94cd27d58b53605e8fc9180afc94d8 -> e3245718594dd7d833bd4eb10ca9f5415b94cd27d58b53605e8fc9180afc94d8 MATCH
+row 10: e3245718594dd7d833bd4eb10ca9f5415b94cd27d58b53605e8fc9180afc94d8 -> e3245718594dd7d833bd4eb10ca9f5415b94cd27d58b53605e8fc9180afc94d8 MATCH
+14 unaffected original/normalized pose files: byte-for-byte unchanged. compose.py and anchors unchanged.
+
+Commands executed successfully:
+python3 pets/chibi-knight/_build/compose.py
+python3 pets/chibi-knight/_build/verify.py
+python3 pets/chibi-knight/_build/check-handedness.py
+
+Visual inspection: run-row2-review.png and run-review.png inspected; all eight frames show shield on viewer right, sword on viewer left, facing right. No anchor changes. Four held key poses remain; small generated silhouette differences remain.
+Temporary Pillow 13.0.0 installation under _build/_vendor removed after validation. Install Pillow to rerun scripts.
