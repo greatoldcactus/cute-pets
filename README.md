@@ -105,10 +105,11 @@ Answered from the pet, the TUI never has to be found.
 chat; `/cd` validates and sets the directory (on v2 it moves an existing session), and
 `/model` / `/agent` work in the draft as well as on a session. The first message creates
 the session at the chosen location with the chosen model — no folder picker, no untitled
-session left behind. The composer is a five-row textarea: **Enter** adds a line and
-**Ctrl/Cmd+Enter** sends. Typed-but-unsent text is kept per session and restored when you
-switch back. OpenCode 2 hosts sessions at arbitrary locations on one server; v1 keeps the
-old server-per-directory spawn. Messages render markdown:
+session left behind. The composer is a five-row textarea. By default **Ctrl/Cmd+Enter**
+sends and Enter adds a newline; Settings → Send message can switch to **Enter sends,
+Shift+Enter adds a newline**. Typed-but-unsent text is kept per session and restored when
+you switch back. OpenCode 2 hosts sessions at arbitrary locations on one server; v1 keeps
+the old server-per-directory spawn. Messages render markdown:
 headings, lists, tables, links, inline code, and fenced code blocks with a language label
 and a copy button. Every user/assistant message with text also has a **copy** button
 (raw markdown) and selectable text. Rendering is local and dependency-free, and everything
@@ -262,7 +263,7 @@ are **not wired for v2**.
 
 | Path | What |
 | --- | --- |
-| `~/.cute-pets/config.json` | `facing`, `auras`, `activePet`, attached `servers` (with credentials), `lastDirectory`, `lastModel`, `lastAgent`, `petPosition` |
+| `~/.cute-pets/config.json` | `facing`, `auras`, `sendWith`, `activePet`, attached `servers` (with credentials), `lastDirectory`, `lastModel`, `lastAgent`, `petPosition` |
 | `pets/<id>/` (repo) | packs that ship with cute-pets: `chibi-knight` |
 | `~/.cute-pets/pets/<id>/` | installed pet packs (the built-in one is copied here on first run) |
 | `~/.cute-pets/hidden.json` | sessions hidden from the pet |
@@ -280,6 +281,9 @@ Facing is a config value, never inferred from screen position:
 
 Auras are on by default: idle is green, running blue, waiting amber, error red, and plan
 violet. Turn them all off with Settings → Auras or `{ "auras": false }` in the config.
+
+`sendWith` is `"ctrl-enter"` (default) or `"enter"`; the same choice is in
+Settings → Send message.
 
 The pet remembers where it was left as `petPosition` (screen coordinates). It is restored
 only if that spot still overlaps a display; otherwise the pet is clamped back on-screen.
