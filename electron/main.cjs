@@ -165,6 +165,7 @@ const cliFacing = (() => {
 
 const config = { ...readConfig() };
 config.facing = cliFacing || (config.facing === "left" ? "left" : "right");
+config.auras = config.auras !== false;
 
 // ---- placement ----------------------------------------------------------
 function workArea(win) {
@@ -509,6 +510,14 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.on("cp:auras-set", (_e, on) => {
+    config.auras = Boolean(on);
+    saveConfig({ ...readConfig(), auras: config.auras });
+    for (const w of [petWin, panelWin]) {
+      if (w && !w.isDestroyed()) w.webContents.send("cp:auras", config.auras);
+    }
+  });
+
   // Manual dragging: the renderer reports global cursor coords, the main process
   // moves the window. Keeps click-to-open working (a click is a drag of <4px).
   ipcMain.on("cp:drag-begin", (_e, p) => {
@@ -536,9 +545,12 @@ app.whenReady().then(() => {
   });
 
   const sendFacing = (w) => () => w.webContents.send("cp:facing", config.facing);
+  const sendAuras = (w) => () => w.webContents.send("cp:auras", config.auras);
   petWin.webContents.on("did-finish-load", sendFacing(petWin));
+  petWin.webContents.on("did-finish-load", sendAuras(petWin));
   panelWin.webContents.on("did-finish-load", () => {
     sendFacing(panelWin)();
+    sendAuras(panelWin)();
     if (panelPending) {
       panelWin.webContents.send("cp:panel-command", panelPending);
       panelPending = null;

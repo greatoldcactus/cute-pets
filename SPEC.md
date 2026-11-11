@@ -146,7 +146,12 @@ base frames 192×208, OpenPets-style activity strips (`activities/<id>.webp`, 4�
 | running | working loop (thinking/editing variants from tool events later) |
 | waiting | attention pose + badge, speech bubble with the permission/form name |
 | error | error pose, stays until acknowledged |
-| plan | review pose (row 8) with a violet aura and ✦ marker |
+| plan | review pose (row 8) with a violet aura |
+
+Each state has a coloured aura: idle green (`#6ee7a8`), running blue (`#5ac8ff`),
+waiting amber (`#ffc65c`), error red (`#ff6b6b`), plan violet (`#a78bfa`). Plan mode keeps
+the waiting/error pose when it needs attention, but uses the violet aura. The whole aura
+layer is gated by the shell config `auras` (Settings → Auras).
 
 Codex V2 sheets use `0 idle, 1 running-right, 2 running-left, 3 waving, 4 jumping,
 5 failed, 6 waiting, 7 running, 8 review, 9–10 look directions`. The face uses
@@ -199,6 +204,7 @@ AppImage first, deb/rpm later, no Flatpak in v1.
 | `lastDirectory` | absolute path | last directory a chat was created in / moved to; the blank chat starts here |
 | `lastModel` | `{id,providerID,variant}` | last model picked with `/model` (also used for the next blank chat) |
 | `lastAgent` | string | last agent picked with `/agent` |
+| `auras` | boolean (default `true`) | coloured glow around the pet for idle/running/waiting/error/plan |
 | `petPosition` | `{x,y}` | last pet window position in screen coordinates; restored if it still overlaps a display |
 
 Precedence: `--facing` CLI flag → config file → default. Changing facing in the UI
