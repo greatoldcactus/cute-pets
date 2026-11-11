@@ -280,8 +280,10 @@ async function loadMessages(){
   const el=$("#msgs");
   try{
     const r=await fetch(`/api/messages?server=${encodeURIComponent(open.server)}&sessionId=${encodeURIComponent(open.id)}&limit=30`);
-    const msgs=await r.json();
-    const key=JSON.stringify((msgs||[]).map(m=>(m.parts||[]).filter(p=>p.type==="text").map(p=>p.text).join("")));
+    const data=await r.json().catch(()=>null);
+    if(!r.ok) throw new Error(data?.error||`messages ${r.status}`);
+    const msgs=Array.isArray(data)?data:[];
+    const key=JSON.stringify(msgs.map(m=>(m.parts||[]).filter(p=>p.type==="text").map(p=>p.text).join("")));
     if(key===lastMsgKey) return;
     lastMsgKey=key;
     el.innerHTML=(msgs||[]).map(m=>({m, t:(m.parts||[]).filter(p=>p.type==="text").map(p=>p.text).join("\n").trim()}))

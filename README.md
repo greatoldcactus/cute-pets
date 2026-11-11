@@ -105,20 +105,25 @@ Answered from the pet, the TUI never has to be found.
 chat; `/cd` validates and sets the directory (on v2 it moves an existing session), and
 `/model` / `/agent` work in the draft as well as on a session. The first message creates
 the session at the chosen location with the chosen model — no folder picker, no untitled
-session left behind. OpenCode 2 hosts sessions at arbitrary locations on one server; v1
-keeps the old server-per-directory spawn. Messages render markdown:
+session left behind. The composer is a five-row textarea: **Enter** adds a line and
+**Ctrl/Cmd+Enter** sends. Typed-but-unsent text is kept per session and restored when you
+switch back. OpenCode 2 hosts sessions at arbitrary locations on one server; v1 keeps the
+old server-per-directory spawn. Messages render markdown:
 headings, lists, tables, links, inline code, and fenced code blocks with a language label
 and a copy button. Every user/assistant message with text also has a **copy** button
 (raw markdown) and selectable text. Rendering is local and dependency-free, and everything
 is HTML-escaped before markup is added.
 
 The chat opens at the newest message (normal chronological order, scrolled to the bottom);
-after reading back, a small **↓** button returns to the latest. Consecutive assistant
-steps that only contain thinking/tool calls are grouped into one collapsed trace
+after reading back, a small **↓** button returns to the latest. Long sessions start with
+the **first user message** pinned at the top; **Load earlier** pages the omitted history
+in without losing your scroll position. Consecutive assistant steps that only contain
+thinking/tool calls are grouped into one collapsed trace
 (`15 steps · 17 tools · 15 thinking`) per turn, expandable to the individual calls with
-their input/output. Provider errors stay visible as a compact line: muted for aborted
-steps and for errors that were retried and followed by another assistant step, red only
-when the turn actually failed.
+their input/output. While a session is running, the last trace shows a live line such as
+`● thinking · …` or `● shell · running · …`. Provider errors stay visible as a compact
+line: muted for aborted steps and for errors that were retried and followed by another
+assistant step, red only when the turn actually failed.
 
 **New chat** — a blank chat with the last directory and model shown in the header. `Ctrl+N`
 and the pet's right-click *New chat* reach the same thing. `/cd` and `/model` apply to the
@@ -295,6 +300,7 @@ GET  /api/defaults         {directory, server, model, agent}   last used / serve
 POST /api/checkdir         {directory, server?}  validate a path (v2; WSL-aware)
 POST /api/prompt           {text, sessionId?|newSession, directory?, server?, model?, agent?}
 GET  /api/messages         ?server=&sessionId=&limit=
+GET  /api/message-page     ?server=&sessionId=&limit=&order=&type=&cursor=&compact=1
 POST /api/permission       {id, reply: once|always|reject}
 POST /api/form             {server, sessionId, formId, answer}   answer a v2 agent question
 POST /api/abort            {server, sessionId}

@@ -265,6 +265,18 @@ export function startServer({ port, host, store, api }) {
         return json(res, 200, out);
       }
 
+      if (route === "GET /api/message-page") {
+        const server = url.searchParams.get("server");
+        const sessionId = url.searchParams.get("sessionId");
+        const limit = Number(url.searchParams.get("limit") ?? 40);
+        const order = url.searchParams.get("order") === "asc" ? "asc" : "desc";
+        const type = url.searchParams.get("type");
+        const cursor = url.searchParams.get("cursor");
+        const compact = url.searchParams.get("compact") === "1";
+        const out = await api.messagePage({ server, sessionId, limit, order, type, cursor, compact });
+        return json(res, 200, out);
+      }
+
       if (req.method === "GET") {
         const rel = url.pathname === "/" ? "index.html" : url.pathname.replace(/^\/+/, "");
         const file = path.join(WEB_ROOT, rel);

@@ -88,6 +88,17 @@ display:flex;align-items:center;gap:5px;user-select:none}
 .msg .trace>summary:before{content:"▸";font-size:9px}
 .msg .trace[open]>summary:before{content:"▾"}
 .msg .trace>summary.has-error{color:var(--err)}
+.msg .trace>summary .tbits{flex:none}
+.msg .trace>summary .tpreview{min-width:0;flex:1;display:flex;align-items:center;gap:5px;color:var(--run);
+font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.msg .trace>summary .tpreview:before{content:"●";font-size:7px;animation:tpulse 1.1s ease-in-out infinite}
+@keyframes tpulse{50%{opacity:.25}}
+.msggap{display:flex;align-items:center;gap:8px;justify-content:center;color:var(--dim);font-size:10px;padding:2px 0}
+.msggap:before,.msggap:after{content:"";flex:1;border-top:1px dashed var(--line)}
+.msggap .pbtn{padding:2px 7px;font-size:10px}
+.liveactivity{margin-top:2px;color:var(--dim);font-size:10px;padding:4px 9px}
+.liveactivity .tpreview{display:flex;align-items:center;gap:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.liveactivity .tpreview:before{content:"●";color:var(--run);font-size:7px;animation:tpulse 1.1s ease-in-out infinite}
 .msg .tracebody{display:flex;flex-direction:column;gap:4px;padding:4px 0 0 10px}
 .msg .toolpart{border-left:2px solid var(--line2);padding-left:7px}
 .msg .toolpart>summary{cursor:pointer;font-size:10px;color:var(--dim);list-style:none;
@@ -148,11 +159,11 @@ font:inherit;font-size:11px;cursor:pointer}
 .perm b{color:var(--wait)}
 /* composer + palette */
 .composer{position:relative;display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--line)}
-.composer input{flex:1;background:var(--card2);border:1px solid var(--line);border-radius:9px;color:var(--ink);
-font:inherit;font-size:12px;padding:7px 10px;min-width:0}
+.composer textarea{flex:1;background:var(--card2);border:1px solid var(--line);border-radius:9px;color:var(--ink);
+font:inherit;font-size:12px;padding:7px 10px;min-width:0;min-height:84px;resize:none;line-height:1.45}
 .composer button{background:#24506b;border:1px solid #2f6d92;color:var(--ink);border-radius:9px;padding:6px 11px;
-font:inherit;cursor:pointer}
-.palette{position:absolute;left:8px;right:8px;bottom:46px;background:#171a23;border:1px solid var(--line);
+font:inherit;cursor:pointer;align-self:flex-end}
+.palette{position:absolute;left:8px;right:8px;bottom:calc(100% + 6px);background:#171a23;border:1px solid var(--line);
 border-radius:10px;box-shadow:0 -10px 26px rgba(0,0,0,.5);overflow:hidden;display:none;max-height:248px;overflow-y:auto}
 .palette.on{display:block}
 .pitem{display:flex;gap:8px;padding:6px 10px;cursor:pointer;align-items:baseline}
@@ -254,7 +265,7 @@ body.mode-panel .mini{left:0;right:0;top:0;bottom:auto;width:auto}
     </div>
     <form class="composer" id="composer">
       <div class="palette" id="palette"></div>
-      <input id="prompt" placeholder="Message the selected session — / for commands" autocomplete="off">
+      <textarea id="prompt" rows="5" placeholder="Message the selected session — / for commands · Ctrl+Enter to send" autocomplete="off"></textarea>
       <button type="submit">&#9166;</button>
     </form>
   </section>
@@ -295,6 +306,7 @@ let state={pet:{state:"idle"},sessions:[],permissions:[],forms:[],servers:[]};
 let finishedIds=[], prevStates=new Map(), firstRender=false;   // sessions that ended while we were watching
 let expanded=IS_PANEL, selected=null, view="chat", filter="all", commands=[], newDir=null, workspaces=[];
 let draft=null, defaults=null; // a new chat before its first message
+let composerDrafts=new Map(), composerKey=""; // unsent text per chat/draft
 if(IS_PANEL) document.body.classList.add("expanded"); // the panel window only exists while open
 
 /* ---------------- sprite ---------------- */
@@ -375,6 +387,7 @@ function setExpanded(on){
 function showView(v){ view=v; if(v!=="chat") draft=null; render(); }
 function startDraft(){
   const base=defaults||{};
+  composerDrafts.delete("draft");
   draft={
     directory: base.directory || workspaces[0]?.directory || null,
     server: base.server || null,
@@ -390,6 +403,26 @@ function startDraft(){
   setTimeout(()=>$("#prompt")?.focus(),30);
 }
 const currentSession=()=>state.sessions.find(s=>s.id===selected)||null;
+function currentComposerKey(){
+  const s=currentSession();
+  return s?`session:${s.server}|${s.id}`:"draft";
+}
+// Keep unsent text per chat. syncComposer saves the old key before restoring the
+// new one, so programmatic fills (palette) are preserved too.
+function syncComposer(){
+  if(!IS_PANEL) return;
+  const el=$("#prompt"); if(!el) return;
+  const key=currentComposerKey();
+  if(key===composerKey) return;
+  if(composerKey) composerDrafts.set(composerKey,el.value);
+  composerKey=key;
+  el.value=composerDrafts.get(key)||"";
+}
+function clearComposer(){
+  const key=currentComposerKey();
+  composerDrafts.delete(key);
+  if(composerKey===key){ const el=$("#prompt"); if(el) el.value=""; }
+}
 
 /* ---------------- rendering ---------------- */
 function renderBubbles(){
@@ -494,13 +527,15 @@ function updateToBottom(){
   if(!b||!to) return;
   to.classList.toggle("on", b.scrollHeight-b.scrollTop-b.clientHeight>80);
 }
-function messageError(err, recovered = false){
+function messageError(err, recovered = false, retrying = false){
   if(!err) return "";
   const type=err.type||"error";
   const msg=err.message||err.data?.message||(typeof err==="string"?err:JSON.stringify(err));
-  const muted=recovered||/aborted|interrupt/i.test(type+" "+msg);
+  const aborted=/aborted|interrupt/i.test(type+" "+msg);
+  const muted=recovered||retrying||aborted;
+  const label=recovered?"retried":retrying?"retrying":type;
   const short=msg.length>220?msg.slice(0,220)+"…":msg;
-  return `<div class="msg-error${muted?" muted":""}" title="${esc(msg)}">${esc(recovered?"retried":type)} · ${esc(short)}</div>`;
+  return `<div class="msg-error${muted?" muted":""}" title="${esc(msg)}">${esc(label)} · ${esc(short)}</div>`;
 }
 function renderPart(p,mid,i){
   if(p.type==="tool"){
@@ -553,32 +588,86 @@ function renderMessage(m){
   const trace=messageTrace(m,mid,above);
   if(text) msgCopy.set(mid,text);
   const copy=text?`<button class="msgcopy" type="button" data-copy="${esc(mid)}" title="Copy message" aria-label="Copy message">copy</button>`:"";
-  return `<div class="msg ${role}${text?" copyable":""}">${copy}${above?trace:""}${text?CPMarkdown.toHtml(text):""}${messageError(m.error,Boolean(m.errorRecovered))}${above?"":trace}</div>`;
+  return `<div class="msg ${role}${text?" copyable":""}">${copy}${above?trace:""}${text?CPMarkdown.toHtml(text):""}${messageError(m.error,Boolean(m.errorRecovered),Boolean(m.errorRetrying))}${above?"":trace}</div>`;
 }
-// An error is "recovered" when the same turn continued with another assistant
-// message before the next user prompt. Provider retries (429/transport) look
-// like that; a turn that truly failed has nothing after it and stays red.
-function markRecoveredErrors(rows){
+// An error is recovered when a later assistant message without an error exists.
+// A retryable provider error is also muted while the session is still running,
+// even before the retry has produced a message.
+function markRecoveredErrors(rows, live = false){
   for(let i=0;i<rows.length;i++){
     const m=rows[i];
-    if(!m.error) continue;
+    if(!m.error||m.gap) continue;
     let recovered=false;
     for(let j=i+1;j<rows.length;j++){
       const n=rows[j];
-      if(n.role==="user") break;
       if(n.role==="assistant"&&!n.error){ recovered=true; break; }
     }
     m.errorRecovered=recovered;
+    m.errorRetrying=Boolean(live&&!recovered&&isRetryableError(m.error));
   }
+}
+function isRetryableError(err){
+  const type=String(err?.type||"");
+  const msg=String(err?.message||err?.data?.message||"");
+  const status=Number(err?.status||0);
+  if(status===408||status===425||status===429||status>=500) return true;
+  return /rate.?limit|retry|overload|unavailable|timeout|transport|econnreset|econnrefused|network|temporar/i.test(type+" "+msg);
+}
+function compactPreview(text, n = 120){
+  const one=String(text??"").replace(/\s+/g," ").trim();
+  return one.length>n?one.slice(0,n)+"…":one;
+}
+function lastLine(text, n = 120){
+  const lines=String(text??"").split(/\n/).map(x=>x.trim()).filter(Boolean);
+  return compactPreview(lines[lines.length-1]||"",n);
+}
+function toolInputHint(input){
+  if(input==null) return "";
+  if(typeof input==="string") return compactPreview(input,90);
+  if(typeof input==="object"){
+    for(const k of ["command","filePath","path","pattern","query","description","url","prompt"]){
+      if(typeof input[k]==="string"&&input[k]) return compactPreview(input[k],90);
+    }
+  }
+  try{ return compactPreview(JSON.stringify(input),90); }catch{ return ""; }
+}
+function activityPreview(activity, fallbackPart){
+  if(activity){
+    if(activity.kind==="tool"){
+      return [activity.tool||"tool",activity.status||"",activity.detail?compactPreview(activity.detail,90):""].filter(Boolean).join(" · ");
+    }
+    if(activity.kind==="thinking"){
+      const line=lastLine(activity.text,110);
+      return line?`thinking · ${line}`:"thinking…";
+    }
+  }
+  if(fallbackPart){
+    if(fallbackPart.type==="tool"){
+      return [fallbackPart.name||"tool",fallbackPart.status||"",fallbackPart.input?toolInputHint(fallbackPart.input):""].filter(Boolean).join(" · ");
+    }
+    if(fallbackPart.type==="reasoning"){
+      const line=lastLine(fallbackPart.text,110);
+      return line?`thinking · ${line}`:"thinking…";
+    }
+  }
+  return "";
+}
+function renderGap(){
+  return `<div class="msggap"><span>Earlier messages omitted</span><button class="pbtn" data-load-earlier="1" ${msgLoadingOlder?"disabled":""}>${msgLoadingOlder?"Loading…":"Load earlier"}</button></div>`;
+}
+function renderLiveActivity(activity){
+  const preview=activityPreview(activity,null);
+  return preview?`<div class="msg assistant liveactivity"><span class="tpreview">${esc(preview)}</span></div>`:"";
 }
 // Consecutive assistant steps with no answer text are one process run. Collapsing
 // them into a single trace keeps a turn readable: one "N steps · M tools" line
 // instead of one line per step.
-function renderRows(rows){
+function renderRows(rows, opts = {}){
   msgCopy.clear();
   const groups=[];
   let pending=null;
   for(const m of rows){
+    if(m.gap){ pending=null; groups.push({kind:"gap"}); continue; }
     const hasText=(m.parts||[]).some(p=>p.type==="text"&&p.text);
     if(hasText){ pending=null; groups.push({kind:"msg",m}); }
     else {
@@ -586,9 +675,14 @@ function renderRows(rows){
       pending.msgs.push(m);
     }
   }
-  return groups.map(g=>g.kind==="msg"?renderMessage(g.m):renderProcess(g.msgs)).join("");
+  const lastKind=groups[groups.length-1]?.kind;
+  return groups.map((g,i)=>{
+    if(g.kind==="gap") return renderGap();
+    if(g.kind==="msg") return renderMessage(g.m);
+    return renderProcess(g.msgs,{live:Boolean(opts.live&&i===groups.length-1),activity:opts.activity});
+  }).join("") + (opts.live && lastKind!=="proc" ? renderLiveActivity(opts.activity) : "");
 }
-function renderProcess(msgs){
+function renderProcess(msgs, { live = false, activity = null } = {}){
   const key=`process:${msgs[0]?.id||"p"}`;
   const parts=msgs.flatMap(m=>m.parts||[]);
   const tools=parts.filter(p=>p.type==="tool");
@@ -600,8 +694,12 @@ function renderProcess(msgs){
     const e=m.error; if(!e) continue;
     const k=`${e.type}|${e.message}`;
     const prev=seen.get(k);
-    if(prev) prev.recovered = prev.recovered && Boolean(m.errorRecovered);
-    else seen.set(k,{err:e, recovered:Boolean(m.errorRecovered)});
+    if(prev){
+      prev.recovered = prev.recovered && Boolean(m.errorRecovered);
+      prev.retrying = prev.retrying && Boolean(m.errorRetrying);
+    } else {
+      seen.set(k,{err:e, recovered:Boolean(m.errorRecovered), retrying:Boolean(m.errorRetrying)});
+    }
   }
   errs.push(...seen.values());
   const bits=[`${msgs.length} step${msgs.length>1?"s":""}`];
@@ -609,42 +707,122 @@ function renderProcess(msgs){
   if(nThink) bits.push(`${nThink} thinking`);
   if(nFile) bits.push(`${nFile} file${nFile>1?"s":""}`);
   if(nSys) bits.push(`${nSys} system`);
-  const hasErr=errs.some(e=>!e.recovered);
+  const hasErr=errs.some(e=>!e.recovered&&!e.retrying);
+  const preview=live?activityPreview(activity,parts[parts.length-1]):"";
+  const summary=`<summary class="${hasErr?"has-error":""}"><span class="tbits">${esc(bits.join(" · "))}</span>`+
+    `${preview?`<span class="tpreview">${esc(preview)}</span>`:""}</summary>`;
   const trace=parts.length
-    ? `<details class="trace" data-k="${esc(key)}:trace"><summary class="${hasErr?"has-error":""}">`+
-      `${esc(bits.join(" · "))}</summary><div class="tracebody">`+
+    ? `<details class="trace" data-k="${esc(key)}:trace">${summary}<div class="tracebody">`+
       `${parts.map((p,i)=>renderPart(p,key,i)).join("")}</div></details>`
     : "";
-  return `<div class="msg assistant process">${errs.map(e=>messageError(e.err,e.recovered)).join("")}${trace}</div>`;
+  return `<div class="msg assistant process">${errs.map(e=>messageError(e.err,e.recovered,e.retrying)).join("")}${trace}</div>`;
+}
+let msgStore=null, msgLoadingOlder=false;
+const emptyMsgStore=(key)=>({key,first:null,firstLoaded:false,older:[],tail:[],cursor:null});
+async function fetchMessagePage(s, opts = {}){
+  const qs=new URLSearchParams({server:s.server,sessionId:s.id,limit:String(opts.limit??40)});
+  if(opts.order) qs.set("order",opts.order);
+  if(opts.type) qs.set("type",opts.type);
+  if(opts.cursor) qs.set("cursor",opts.cursor);
+  if(opts.compact) qs.set("compact","1");
+  const r=await fetch("/api/message-page?"+qs.toString());
+  if(r.status===404){
+    const rr=await fetch(`/api/messages?server=${encodeURIComponent(s.server)}&sessionId=${encodeURIComponent(s.id)}&limit=${opts.limit??40}`);
+    const data=await rr.json().catch(()=>null);
+    if(!rr.ok) throw new Error(data?.error||`messages ${rr.status}`);
+    if(!Array.isArray(data)) throw new Error("unexpected messages response");
+    return {messages:data,cursor:null};
+  }
+  const data=await r.json().catch(()=>null);
+  if(!r.ok) throw new Error(data?.error||`messages ${r.status}`);
+  if(!data||!Array.isArray(data.messages)) throw new Error("unexpected messages response");
+  return data;
+}
+function renderMessageStore(s, { preserve = false, force = false } = {}){
+  if(!s||!msgStore||msgStore.key!==sessionKey(s)) return;
+  const byTime=(a,b)=>(a.time??0)-(b.time??0);
+  const seen=new Set(), rest=[];
+  for(const m of [...msgStore.older,...msgStore.tail]){
+    if(!m||!m.id||seen.has(m.id)) continue;
+    seen.add(m.id); rest.push(m);
+  }
+  rest.sort(byTime);
+  const rows=[];
+  if(msgStore.first) rows.push(msgStore.first);
+  rows.push(...rest.filter(m=>!msgStore.first||m.id!==msgStore.first.id));
+  if(msgStore.cursor) rows.splice(msgStore.first?1:0,0,{id:"__gap__",gap:true});
+  markRecoveredErrors(rows,s.state==="running");
+  const key=JSON.stringify({rows:rows.map(m=>[m.id,m.error,m.errorRecovered,m.errorRetrying,m.gap,m.parts]),
+    live:s.state==="running",activity:s.activity||null,loading:msgLoadingOlder});
+  if(!force&&key===msgKey){ updateToBottom(); return; }
+  msgKey=key;
+  const body=$("#dbody");
+  const atBottom=body.scrollHeight-body.scrollTop-body.clientHeight<40;
+  const prevH=body.scrollHeight, prevTop=body.scrollTop;
+  const open=new Set([...body.querySelectorAll("details[open][data-k]")].map(d=>d.dataset.k));
+  body.innerHTML=renderRows(rows,{live:s.state==="running",activity:s.activity})||`<div class="empty">no messages yet</div>`;
+  for(const k of open){
+    const d=[...body.querySelectorAll("details[data-k]")].find(x=>x.dataset.k===k);
+    if(d) d.open=true;
+  }
+  if(preserve) body.scrollTop=body.scrollHeight-prevH+prevTop;
+  else if(atBottom) body.scrollTop=body.scrollHeight;
+  updateToBottom();
 }
 async function loadMessages(s){
   if(!s) return;
   const sk=sessionKey(s);
   const seq=++msgSeq;
   try{
-    const msgs=await (await fetch(`/api/messages?server=${encodeURIComponent(s.server)}&sessionId=${encodeURIComponent(s.id)}&limit=30`)).json();
+    const page=await fetchMessagePage(s,{limit:40,order:"desc"});
     if(seq!==msgSeq||msgSession!==sk) return; // a newer session/load won
-    markRecoveredErrors(msgs||[]);
-    const rows=(msgs||[]).filter(m=>(m.parts&&m.parts.length)||m.error);
-    const key=JSON.stringify(rows.map(m=>[m.id,m.error,m.errorRecovered,m.parts]));
-    if(key===msgKey){ updateToBottom(); return; } // already on screen
-    msgKey=key;
-    const body=$("#dbody");
-    const atBottom=body.scrollHeight-body.scrollTop-body.clientHeight<40;
-    const open=new Set([...body.querySelectorAll("details[open][data-k]")].map(d=>d.dataset.k));
-    body.innerHTML=renderRows(rows)||`<div class="empty">no messages yet</div>`;
-    // keep expanded traces/tools expanded across streaming updates
-    for(const k of open){
-      const d=[...body.querySelectorAll("details[data-k]")].find(x=>x.dataset.k===k);
-      if(d) d.open=true;
+    if(!msgStore||msgStore.key!==sk) msgStore=emptyMsgStore(sk);
+    msgStore.tail=page.messages;
+    if(!msgStore.older.length) msgStore.cursor=page.cursor?.next??null;
+    if(msgStore.cursor&&!msgStore.firstLoaded){
+      msgStore.firstLoaded=true;
+      try{
+        const first=await fetchMessagePage(s,{limit:1,order:"asc",type:"user"});
+        if(msgStore?.key===sk){
+          msgStore.first=first.messages[0]||null;
+          if(currentSession()?.id===s.id) renderMessageStore(s,{});
+        }
+      }catch{
+        if(msgStore?.key===sk) msgStore.firstLoaded=false;
+      }
     }
-    if(atBottom) body.scrollTop=body.scrollHeight;
-    updateToBottom();
+    renderMessageStore(s,{});
   }catch(e){
     if(seq===msgSeq&&msgSession===sk){
-      msgKey=""; // let the next poll retry and repaint after a transient failure
-      $("#dbody").innerHTML=`<div class="empty">${esc(e)}</div>`;
+      msgKey="";
+      $("#dbody").innerHTML=`<div class="empty">${esc(e.message||e)}</div>`;
       updateToBottom();
+    }
+  }
+}
+async function loadEarlier(){
+  const s=currentSession();
+  if(!s||!msgStore||msgStore.key!==sessionKey(s)||!msgStore.cursor||msgLoadingOlder) return;
+  const store=msgStore, key=store.key;
+  msgLoadingOlder=true; msgKey=""; renderMessageStore(s,{preserve:true,force:true});
+  try{
+    const page=await fetchMessagePage(s,{limit:40,cursor:store.cursor,compact:true});
+    if(msgStore!==store||msgStore.key!==key||currentSession()?.id!==s.id) return;
+    const ids=new Set([...msgStore.older,...msgStore.tail].map(m=>m.id));
+    const older=[...msgStore.older];
+    for(const m of page.messages){
+      if(!m.id||ids.has(m.id)) continue;
+      ids.add(m.id); older.push(m);
+    }
+    msgStore.older=older;
+    msgStore.cursor=page.messages.length?page.cursor?.next??null:null;
+  }catch(e){
+    if(msgStore===store) $("#dbody").insertAdjacentHTML("afterbegin",`<div class="empty">${esc(e.message||e)}</div>`);
+  }finally{
+    msgLoadingOlder=false;
+    if(msgStore===store&&msgStore.key===key&&currentSession()?.id===s.id){
+      msgKey="";
+      renderMessageStore(s,{preserve:true,force:true});
     }
   }
 }
@@ -892,7 +1070,7 @@ function render(){
     const c=state.pet?.counts||{};
     $("#psub").textContent=[plan?"planning":"",c.waiting?`${c.waiting} needs you`:"",c.running?`${c.running} working`:"",
       c.error?`${c.error} error`:"",`${c.idle||0} idle`].filter(Boolean).join(" · ")||"idle";
-    renderList(); renderPerms(); renderDetail(); renderForms();
+    renderList(); renderPerms(); renderDetail(); renderForms(); syncComposer();
     if(view==="pets") renderPetsList();
   }
   if(IS_BUBBLES) renderBubbles();
@@ -900,6 +1078,8 @@ function render(){
 
 /* ---------------- interactions ---------------- */
 document.addEventListener("click",async e=>{
+  const earlier=e.target.closest("[data-load-earlier]");
+  if(earlier){ e.preventDefault(); await loadEarlier(); return; }
   const unh=e.target.closest("[data-act='s-unhide']");
   if(unh){ try{ await post("/api/session/hide",{sessionId:unh.dataset.sid,hidden:false}); }catch(err){ alert(String(err)); }
     showView("settings"); return; }
@@ -1170,6 +1350,7 @@ async function changeDir(p){
 }
 
 $("#prompt").addEventListener("input",e=>{
+  composerDrafts.set(currentComposerKey(),e.target.value);
   const v=e.target.value;
   if(palMode==="dirs"){
     if(!/^\/cd\s+/.test(v)){ closePalette(); return; }
@@ -1213,6 +1394,7 @@ function fillPaletteSelection(){
   return false;
 }
 $("#prompt").addEventListener("keydown",e=>{
+  if(e.isComposing) return;
   if(!pal.classList.contains("on")) return;
   if(e.key==="ArrowDown"||e.key==="ArrowUp"){
     e.preventDefault();
@@ -1222,16 +1404,24 @@ $("#prompt").addEventListener("keydown",e=>{
   } else if(e.key==="Tab"){
     e.preventDefault();
     fillPaletteSelection(); // no-op for model/agent lists
-  } else if(e.key==="Enter"){
+  } else if(e.key==="Enter"&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey){
     if(palMode==="dirs"){
       const typed=cdPrefix($("#prompt").value);
-      // with a path typed, let Enter submit the line; with no path, run the
-      // highlighted suggestion
-      if(typed && typed.trim()) return;
+      // with a path typed, run the line; with no path, run the highlighted suggestion
+      if(typed && typed.trim()){
+        e.preventDefault(); closePalette(); $("#composer").requestSubmit(); return;
+      }
       e.preventDefault(); choosePalette(palSel); return;
     }
     e.preventDefault(); choosePalette(palSel);
   } else if(e.key==="Escape"){ closePalette(); }
+});
+// Enter inserts a newline; Ctrl/Cmd+Enter sends.
+$("#prompt").addEventListener("keydown",e=>{
+  if(e.key!=="Enter"||(!e.ctrlKey&&!e.metaKey)||e.isComposing) return;
+  e.preventDefault();
+  closePalette();
+  $("#composer").requestSubmit();
 });
 pal.addEventListener("click",e=>{
   const it=e.target.closest("[data-i]"); if(!it) return;
@@ -1254,7 +1444,7 @@ $("#composer").addEventListener("submit",async e=>{
   };
 
   if(raw==="/cd"||raw.startsWith("/cd ")){
-    $("#prompt").value="";
+    clearComposer();
     closePalette();
     await changeDir(raw.slice(3).trim());
     return;
@@ -1265,7 +1455,7 @@ $("#composer").addEventListener("submit",async e=>{
     const [name,...rest]=raw.slice(1).split(" ");
     const pet=PET_CMDS.find(c=>c.name===name);
     if(pet){
-      $("#prompt").value="";
+      clearComposer();
       if(pet.pick==="model"){ if(!currentSession()&&!draft) startDraft(); await ensureModels(); openPalette("","models"); return; }
       if(pet.pick==="agent"){ if(!currentSession()&&!draft) startDraft(); await ensureAgents(); openPalette("","agents"); return; }
       if(pet.run) return pet.run();
@@ -1277,6 +1467,7 @@ $("#composer").addEventListener("submit",async e=>{
         const r=await post("/api/prompt",{newSession:true,server:d.server,directory:d.directory,model:d.model,agent:d.agent,
           command:name,text:rest.join(" "),title:`/${name}`});
         if(r.session) state.sessions=state.sessions.filter(x=>x.id!==r.session.id).concat(r.session);
+        clearComposer();
         draft=null; selected=r.sessionId; msgKey=""; msgSession=""; view="chat"; render();
       }catch(err){ alert(String(err)); }
       return;
@@ -1284,7 +1475,7 @@ $("#composer").addEventListener("submit",async e=>{
     try{
       await post("/api/prompt",{sessionId:s?s.id:null,server:s?s.server:null,newSession:!s,
         command:name,text:rest.join(" "),title:`/${name}`});
-      $("#prompt").value=""; msgKey="";
+      clearComposer(); msgKey="";
     }catch(err){ alert(String(err)); }
     return;
   }
@@ -1294,6 +1485,7 @@ $("#composer").addEventListener("submit",async e=>{
     try{
       const r=await post("/api/prompt",{newSession:true,text:raw,directory:d.directory,server:d.server,model:d.model,agent:d.agent});
       if(r.session) state.sessions=state.sessions.filter(x=>x.id!==r.session.id).concat(r.session);
+      clearComposer();
       draft=null; selected=r.sessionId; msgKey=""; msgSession=""; view="chat";
       if(defaults){
         if(r.session?.directory || d.directory) defaults.directory=r.session?.directory || d.directory;
@@ -1308,7 +1500,7 @@ $("#composer").addEventListener("submit",async e=>{
 
   try{
     await post("/api/prompt",{sessionId:s?s.id:null,server:s?s.server:null,newSession:!s,text:raw});
-    $("#prompt").value=""; msgKey="";
+    clearComposer(); msgKey="";
     if(s) setTimeout(()=>loadMessages(s),700);
   }catch(err){ alert(String(err)); }
 });

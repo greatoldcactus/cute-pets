@@ -128,29 +128,50 @@ export class OpenCodeV2Client {
     return out?.data ?? [];
   }
 
+  // Fetch one page of messages. v2 pages with an opaque cursor; pages are
+  // returned from oldest to newest so the face can prepend older pages without
+  // reversing everything again.
+  async messagePage(id, { limit = 20, order = "desc", type = null, cursor = null, compact = false } = {}) {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (type) qs.set("type", type);
+    if (cursor) qs.set("cursor", cursor);
+    else qs.set("order", order === "asc" ? "asc" : "desc");
+    const out = await this.#req(`/api/session/${enc(id)}/message?${qs.toString()}`);
+    const rows = this.#normalizeRows(out?.data ?? [], { compact });
+    rows.sort((a, b) => (a.info.time?.created ?? 0) - (b.info.time?.created ?? 0));
+    return { messages: rows, cursor: out?.cursor ?? null };
+  }
+
   async messages(id, limit = 20) {
-    // Ask for the newest page instead of the whole history: tool inputs/outputs
-    // can be large and the chat only needs the tail. The response is newest-first.
-    const out = await this.#req(`/api/session/${enc(id)}/message?limit=${encodeURIComponent(String(limit))}&order=desc`);
-    const rows = [...(out?.data ?? [])].reverse();
+    const page = await this.messagePage(id, { limit, order: "desc" });
+    return page.messages;
+  }
+
+  #normalizeRows(rows, { compact = false } = {}) {
+    const clip = (s, n) => {
+      const text = String(s ?? "");
+      return text.length > n ? text.slice(0, n) + "\n…" : text;
+    };
     const toolOutput = (st) => {
       let o = st?.content;
       if (Array.isArray(o)) o = o.filter((x) => x?.type === "text" && x.text).map((x) => x.text).join("\n");
       else if (o && typeof o === "object") o = JSON.stringify(o, null, 2);
       if (st?.error) o = [String(st.error), o || ""].filter(Boolean).join("\n\n");
-      return o || "";
+      o = o || "";
+      return compact ? clip(o, 4000) : o;
     };
     const partsOf = (m) => {
       const parts = [];
       if (m.type === "user") {
-        if (m.text) parts.push({ type: "text", text: m.text });
+        const text = m.text ?? m.payload?.text;
+        if (text) parts.push({ type: "text", text });
         for (const f of m.files ?? []) {
           parts.push({ type: "file", name: f?.name || f?.path || String(f), path: f?.path ?? null });
         }
       } else if (m.type === "assistant") {
         for (const c of m.content ?? []) {
-          if (c.type === "text" && c.text) parts.push({ type: "text", text: c.text });
-          else if (c.type === "reasoning" && c.text) parts.push({ type: "reasoning", text: c.text });
+          if (c.type === "text" && c.text) parts.push({ type: "text", text: compact ? clip(c.text, 8000) : c.text });
+          else if (c.type === "reasoning" && c.text) parts.push({ type: "reasoning", text: compact ? clip(c.text, 4000) : c.text });
           else if (c.type === "tool") {
             const st = c.state ?? {};
             parts.push({
@@ -295,12 +316,37 @@ export class OpenCodeV2Client {
     const dec = new TextDecoder();
     let buf = "";
 
+    // Live "what is happening" state, kept out of the message store: reasoning
+    // deltas can be very frequent, so the preview is throttled; tool events are
+    // emitted as they arrive.
+    const toolNames = new Map(); // call id -> tool name
+    const reasoningText = new Map(); // session id -> rolling tail
+    const reasoningAt = new Map();
+    const clip = (s, n) => {
+      const text = String(s ?? "").replace(/\s+/g, " ").trim();
+      return text.length > n ? text.slice(0, n) + "…" : text;
+    };
+    const toolHint = (input) => {
+      if (input == null) return "";
+      if (typeof input === "string") return clip(input, 120);
+      if (typeof input === "object") {
+        for (const key of ["command", "filePath", "path", "pattern", "query", "description", "url", "prompt"]) {
+          if (typeof input[key] === "string" && input[key]) return clip(input[key], 120);
+        }
+      }
+      try { return clip(JSON.stringify(input), 120); } catch { return ""; }
+    };
+    const activity = (sessionID, value) =>
+      onEvent({ type: "session.activity", properties: { sessionID, activity: value } });
+
     const emit = (wrapper) => {
       const d = wrapper.data ?? {};
       const sid = d.sessionID;
       switch (wrapper.type) {
         case "session.created":
           return onEvent({ type: "session.created", properties: { info: OpenCodeV2Client.mapSession(d) } });
+        case "session.deleted":
+          return onEvent({ type: "session.deleted", properties: { sessionID: sid } });
         // v2 announces a fork with only its id and parent, not its info. Fetch the
         // session so its title ("… (fork #N)") reaches the pet immediately instead
         // of waiting for a full sync (the store used to show it as "(untitled)").
@@ -326,6 +372,43 @@ export class OpenCodeV2Client {
           return onEvent({ type: "session.idle", properties: { sessionID: sid } });
         case "session.execution.failed":
           return onEvent({ type: "session.error", properties: { sessionID: sid, error: { message: "execution failed" } } });
+        case "session.reasoning.started":
+          reasoningText.set(sid, "");
+          return activity(sid, { kind: "thinking", text: "", status: "started" });
+        case "session.reasoning.delta": {
+          const text = (reasoningText.get(sid) ?? "") + (d.delta ?? "");
+          const tail = text.slice(-400);
+          reasoningText.set(sid, tail);
+          const now = Date.now();
+          if (now - (reasoningAt.get(sid) ?? 0) < 250) return;
+          reasoningAt.set(sid, now);
+          return activity(sid, { kind: "thinking", text: tail, status: "streaming" });
+        }
+        case "session.reasoning.ended": {
+          const tail = String(d.text ?? reasoningText.get(sid) ?? "").slice(-400);
+          reasoningText.set(sid, tail);
+          reasoningAt.delete(sid);
+          return activity(sid, { kind: "thinking", text: tail, status: "completed" });
+        }
+        case "session.tool.input.started":
+          if (d.id) toolNames.set(d.id, d.name || "tool");
+          return activity(sid, { kind: "tool", tool: d.name || "tool", status: "input", callID: d.id ?? null });
+        case "session.tool.called": {
+          const name = toolNames.get(d.id) || "tool";
+          return activity(sid, { kind: "tool", tool: name, status: "running", detail: toolHint(d.input), callID: d.id ?? null });
+        }
+        case "session.tool.success": {
+          const name = toolNames.get(d.id) || "tool";
+          if (d.id) toolNames.delete(d.id);
+          return activity(sid, { kind: "tool", tool: name, status: "completed", callID: d.id ?? null });
+        }
+        case "session.tool.failed":
+        case "session.tool.error":
+        case "session.tool.cancelled": {
+          const name = toolNames.get(d.id) || "tool";
+          if (d.id) toolNames.delete(d.id);
+          return activity(sid, { kind: "tool", tool: name, status: "error", callID: d.id ?? null });
+        }
         case "session.text.delta":
           return onEvent({ type: "message.part.delta", properties: { sessionID: sid, delta: d.delta ?? "" } });
         case "session.text.ended":

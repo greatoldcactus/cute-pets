@@ -77,6 +77,7 @@ export class PetState {
         model: null,
         state: STATE.IDLE,
         detail: null,
+        activity: null,
         tokens: { input: 0, output: 0 },
         cost: 0,
         lastText: "",
@@ -106,12 +107,15 @@ export class PetState {
     if (type === "busy") {
       rec.state = STATE.RUNNING;
       rec.detail = null;
+      rec.activity = null;
     } else if (type === "idle") {
       rec.state = this.hasPending(rec.key) ? STATE.WAITING : STATE.IDLE;
       rec.detail = null;
+      rec.activity = null;
     } else if (type === "retry") {
       rec.state = STATE.ERROR;
       rec.detail = status.action?.label ?? status.message ?? "retrying";
+      rec.activity = null;
     }
     rec.updatedAt = Date.now();
     this.touch();
@@ -122,6 +126,7 @@ export class PetState {
     if (!rec) return;
     rec.state = STATE.ERROR;
     rec.detail = message ?? "error";
+    rec.activity = null;
     rec.updatedAt = Date.now();
     this.touch();
   }
@@ -134,11 +139,30 @@ export class PetState {
     this.touch();
   }
 
+  // The server's session list is authoritative. Drop records it no longer
+  // lists (deleted sessions were lingering and then failing to load messages).
+  reconcileSessions(server, ids) {
+    const keep = new Set(ids);
+    let changed = false;
+    for (const [key, rec] of [...this.sessions]) {
+      if (rec.server !== server || keep.has(rec.id)) continue;
+      this.sessions.delete(key);
+      for (const [pid, [k]] of this.permissions) if (k === key) this.permissions.delete(pid);
+      for (const [fid, [k]] of this.forms) if (k === key) this.forms.delete(fid);
+      changed = true;
+    }
+    if (changed) {
+      this.recomputeWaiting();
+      this.touch();
+    }
+  }
+
   noteAssistantPart(server, id, part) {
     const rec = this.sessions.get(keyOf(server, id));
     if (!rec || !part) return;
     if (part.type === "text" && typeof part.text === "string") {
       rec.lastText = part.text.slice(-600);
+      rec.activity = null; // the answer is visible; the trace no longer needs a preview
       rec.updatedAt = Date.now();
       this.touch();
     }
@@ -148,6 +172,28 @@ export class PetState {
     const rec = this.sessions.get(keyOf(server, id));
     if (!rec || typeof delta !== "string") return;
     rec.lastText = (rec.lastText + delta).slice(-600);
+    rec.activity = null;
+    rec.updatedAt = Date.now();
+    this.touch();
+  }
+
+  // A small live summary for the process trace: the latest thought, or the tool
+  // that is currently running. Deliberately separate from the message history.
+  noteActivity(server, id, activity) {
+    const rec = this.sessions.get(keyOf(server, id));
+    if (!rec || !activity) return;
+    const prev = rec.activity;
+    rec.activity = {
+      kind: activity.kind || "thinking",
+      text: activity.text !== undefined
+        ? String(activity.text ?? "").slice(-400)
+        : (activity.kind === "thinking" ? (prev?.text ?? "") : ""),
+      tool: activity.tool ?? null,
+      detail: activity.detail ? String(activity.detail).slice(0, 160) : null,
+      status: activity.status ?? null,
+      callID: activity.callID ?? null,
+      at: Date.now(),
+    };
     rec.updatedAt = Date.now();
     this.touch();
   }
@@ -292,6 +338,7 @@ export class PetState {
         model: rec.model,
         state: rec.state,
         detail: rec.detail,
+        activity: rec.activity,
         tokens: rec.tokens,
         cost: rec.cost,
         lastText: rec.lastText,
