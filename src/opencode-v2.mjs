@@ -166,8 +166,17 @@ export class OpenCodeV2Client {
     if (body.title) payload.title = body.title;
     if (body.agent) payload.agent = body.agent;
     if (body.model) payload.model = body.model;
+    if (body.location) payload.location = body.location;
     const out = await this.#req("/api/session", { method: "POST", body: JSON.stringify(payload) });
     return OpenCodeV2Client.mapSession(out?.data);
+  }
+  // v2 moves a session between project directories; the server accepts the path
+  // and the next tool call resolves it, so the face validates the host path.
+  moveSession(id, directory) {
+    return this.#req(`/api/session/${enc(id)}/move`, {
+      method: "POST",
+      body: JSON.stringify({ directory }),
+    });
   }
 
   // v2 prompts are queued; "steer" (the default) is dropped when no turn is running.
@@ -237,8 +246,8 @@ export class OpenCodeV2Client {
     return out?.data ?? [];
   }
 
-  setModel() { throw new Error("model switching is not implemented for OpenCode 2"); }
-  setAgent() { throw new Error("agent switching is not implemented for OpenCode 2"); }
+  setModel(id, ref) { return this.post(`/api/session/${enc(id)}/model`, { model: ref }); }
+  setAgent(id, agent) { return this.post(`/api/session/${enc(id)}/agent`, { agent }); }
   summarize() { throw new Error("summarize is not implemented for OpenCode 2"); }
   share() { throw new Error("share is not implemented for OpenCode 2"); }
   unshare() { throw new Error("share is not implemented for OpenCode 2"); }

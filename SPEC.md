@@ -92,9 +92,15 @@ label like "2 need you" / "1 failed" / "3 working" / "all done".
 
 - `GET /api/state` — snapshot `{generatedAt, pet, servers[], sessions[], permissions[]}`
 - `GET /api/events` — SSE, `event: state` with the same snapshot on every change (~120 ms debounce)
-- `POST /api/prompt` — `{text, sessionId?|server?, newSession?, title?}` → `{server, sessionId}`
+- `POST /api/prompt` — `{text, sessionId?|server?, newSession?, title?, directory?, model?, agent?}`
+  → `{server, sessionId, session}`; v2 creates the session with a `location`
+- `GET /api/defaults` — `{directory, server, model, agent}` (last used / server default)
+- `POST /api/checkdir` — `{directory, server?}` → `{ok, directory, server, wsl}`;
+  validates on the brain host or its WSL UNC mount
 - `POST /api/abort` — `{server, sessionId}`
 - `POST /api/permission` — `{id, reply}`
+- `POST /api/session/action` — `{sessionId, action, value}`; includes `move` (v2),
+  `fork`, `model`, `agent`
 - `GET /api/messages?server&sessionId&limit` — normalized
   `{role, parts, tokens, time, error}`; parts are `text`, `reasoning`, `tool`
   (`name/status/input/output`) or `file`, so faces can collapse the process trace
@@ -157,6 +163,9 @@ AppImage first, deb/rpm later, no Flatpak in v1.
 | key | values | meaning |
 | --- | --- | --- |
 | `facing` | `"right"` (default) \| `"left"` | which way the sprite is drawn; `left` is a horizontal mirror |
+| `lastDirectory` | absolute path | last directory a chat was created in / moved to; the blank chat starts here |
+| `lastModel` | `{id,providerID,variant}` | last model picked with `/model` (also used for the next blank chat) |
+| `lastAgent` | string | last agent picked with `/agent` |
 
 Precedence: `--facing` CLI flag → config file → default. Changing facing in the UI
 (double-click) writes the file, so it survives restarts. Window position is also worth
@@ -179,8 +188,14 @@ persisting later; it is desktop-owned state, not a session concern.
   permission replies, and event translation
   (`session.execution.*`/`session.text.*` → v1 names). Fork is implemented
   (`POST /api/session/{id}/fork`; `session.forked` carries no info, so the client fetches
-  the new session to pick up its `(fork #N)` title). Model/agent/compact/share/revert are
-  not implemented for v2.
+  the new session to pick up its `(fork #N)` title). Model/agent switch
+  (`/api/session/{id}/model`, `/agent`), session move (`/api/session/{id}/move`) and
+  creating at a `location` are implemented for v2. Compact/share/revert are not.
+- **Directories are server-side.** v2 servers host sessions at arbitrary locations on
+  one server; v1 servers are bound to one cwd and need a spawned server per directory.
+  `/cd` validates the path on the brain host (or maps a WSL POSIX path through
+  `//wsl.localhost/<distro>`), then moves a v2 session or sets the draft directory for
+  the first message. No native folder picker: it only sees the Windows filesystem.
 
 ## 8. Risks to verify
 

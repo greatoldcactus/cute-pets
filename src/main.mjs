@@ -39,6 +39,44 @@ async function waitForHealth(url, timeoutMs = 20000) {
 }
 const LOG_FILE = path.join(os.homedir(), ".cute-pets", "brain.log");
 const HIDDEN_FILE = path.join(os.homedir(), ".cute-pets", "hidden.json");
+
+// ---- directories ---------------------------------------------------------
+// v2 sessions can be created/moved at any directory the server's host can see;
+// the server itself does not stat the path up front. Validate on the brain host
+// (or through its WSL UNC mount) so /cd fails before a turn is started.
+function isRemoteUrl(url) {
+  try {
+    const host = new URL(url).hostname;
+    return !["127.0.0.1", "localhost", "::1", "[::1]"].includes(host);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeDir(dir, entry) {
+  let value = String(dir || "").trim();
+  if (!value) throw new Error("directory required");
+  const home = entry?.workdir || os.homedir();
+  if (value === "~") value = home;
+  else if (value.startsWith("~/") || value.startsWith("~\\")) value = home.replace(/[\\/]+$/, "") + value.slice(1);
+  if (!/^([a-zA-Z]:[\\/]|\\\\|\/)/.test(value)) throw new Error(`use an absolute path: ${value}`);
+  value = /^[a-zA-Z]:[\\/]/.test(value) ? path.win32.normalize(value) : path.posix.normalize(value);
+  return value;
+}
+
+function hostPath(dir, entry) {
+  if (entry?.distro) {
+    // a WSL server only understands POSIX paths; map them through its UNC share
+    return dir.startsWith("/") ? `//wsl.localhost/${entry.distro}${dir}` : null;
+  }
+  if (process.platform === "win32" && dir.startsWith("/")) return null; // local Windows server
+  return dir;
+}
+
+function modelRef(model) {
+  if (!model) return null;
+  return { id: model.id, providerID: model.providerID, variant: model.variant ?? "default" };
+}
 const log = (...a) => {
   const line = `[${new Date().toISOString()}] ${a.join(" ")}`;
   console.log(line);
@@ -152,7 +190,7 @@ class Hub {
     return online[0].client.baseUrl;
   }
 
-  async attach(url, { directory = null, password = null } = {}) {
+  async attach(url, { directory = null, password = null, distro = null } = {}) {
     const clean = String(url).replace(/\/+$/, "");
     const existing = this.clients.get(clean);
     if (existing) {
@@ -185,14 +223,14 @@ class Hub {
     } catch {}
     this.store.addServer(clean, { directory: workdir });
     this.store.setServerOnline(clean, true);
-    const entry = { client, controller: null, attempts: 0, workdir, password: creds };
+    const entry = { client, controller: null, attempts: 0, workdir, password: creds, distro };
     this.clients.set(clean, entry);
     log(`attached ${clean} (opencode ${health?.version ?? "?"})`);
     try {
       if (creds) this.credentials.set(clean, creds);
       const cfg = readConfig();
       const list = (cfg.servers ?? []).filter((e) => (typeof e === "string" ? e : e.url) !== clean);
-      list.push(creds ? { url: clean, password: creds } : clean);
+      list.push(creds ? { url: clean, password: creds, ...(distro ? { distro } : {}) } : clean);
       writeConfig({ servers: list });
     } catch {}
     await this.sync(clean);
@@ -216,12 +254,16 @@ class Hub {
     try { wsl = wslServices(); } catch (e) { log("wsl scan failed:", e.message); }
     if (wsl.length && !this.wslLogged) { this.wslLogged = true; log(`WSL services found: ${wsl.map((w) => w.url).join(", ")}`); }
     for (const entry of wsl) {
-      if (this.clients.has(entry.url)) continue;
+      const existing = this.clients.get(entry.url);
+      if (existing) {
+        if (!existing.distro && entry.distro) existing.distro = entry.distro;
+        continue;
+      }
       const last = this.wslTried.get(entry.url) ?? 0;
       if (Date.now() - last < 60_000) continue;
       this.wslTried.set(entry.url, Date.now());
       try {
-        const client = await this.attach(entry.url, { password: entry.password });
+        const client = await this.attach(entry.url, { password: entry.password, distro: entry.distro });
         if (client) {
           attached.push(entry.url);
           log(`attached WSL service ${entry.url} (${entry.distro})`);
@@ -386,6 +428,78 @@ class Hub {
     return [...byDir.values()].sort((a, b) => b.sessions - a.sessions);
   }
 
+  // Resolve a user-supplied directory on the brain host (or its WSL mount) and
+  // return the absolute path. Remote servers cannot be checked locally, so their
+  // paths are passed through.
+  hostDirectory(directory, entry) {
+    const dir = normalizeDir(directory, entry);
+    if (isRemoteUrl(entry.client.baseUrl)) return dir;
+    const hp = hostPath(dir, entry);
+    if (!hp) throw new Error(`"${dir}" is a Linux path; attach the WSL server that owns it`);
+    if (!fs.existsSync(hp) || !fs.statSync(hp).isDirectory()) throw new Error(`not a directory: ${dir}`);
+    return dir;
+  }
+
+  defaults() {
+    const cfg = readConfig();
+    const first = this.list()[0];
+    return {
+      directory: cfg.lastDirectory || first?.workdir || os.homedir(),
+      server: first?.client.baseUrl ?? null,
+      model: cfg.lastModel ?? null,
+      agent: cfg.lastAgent ?? null,
+    };
+  }
+
+  // Validate a directory before a draft starts or a session moves. v2 only: v1
+  // servers are bound to one cwd and need a server per directory.
+  checkdir({ directory, server } = {}) {
+    if (!directory) throw new Error("directory required");
+    const candidates = [];
+    if (server && this.clients.has(server)) candidates.push(server);
+    for (const entry of this.list()) if (!candidates.includes(entry.client.baseUrl)) candidates.push(entry.client.baseUrl);
+    let lastError = null;
+    for (const url of candidates) {
+      const entry = this.clients.get(url);
+      if (!entry?.client.online || entry.client.version !== "2") continue;
+      try {
+        return { ok: true, directory: this.hostDirectory(directory, entry), server: url, wsl: Boolean(entry.distro) };
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    if (lastError) throw lastError;
+    throw new Error("no OpenCode 2 server attached");
+  }
+
+  // Pick the server a new session at `directory` belongs to. For v2 any attached
+  // server can host a location; prefer the one the face was using, then the rest.
+  // v1 falls back to the old server-per-directory spawn.
+  async resolveDirectory(directory, preferred) {
+    const dir = String(directory || "").trim();
+    if (!dir) return null;
+    const candidates = [];
+    const push = (url) => {
+      if (url && this.clients.has(url) && !candidates.includes(url)) candidates.push(url);
+    };
+    push(preferred);
+    for (const entry of this.list()) push(entry.client.baseUrl);
+    let lastError = null;
+    let sawV2 = false;
+    for (const url of candidates) {
+      const entry = this.clients.get(url);
+      if (!entry?.client.online || entry.client.version !== "2") continue;
+      sawV2 = true;
+      try {
+        return { server: url, directory: this.hostDirectory(dir, entry) };
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    if (sawV2) throw lastError || new Error(`no OpenCode 2 server can use ${dir}`);
+    return await this.ensureWorkspace(dir);
+  }
+
   async models({ server }) {
     const url = this.pickServer(server);
     const entry = url && this.clients.get(url);
@@ -424,20 +538,39 @@ class Hub {
     const client = entry.client;
     const rec = this.store.sessions.get(`${url}::${sessionId}`);
     const refresh = async () => {
-      try { this.store.upsertSession(url, await client.get(`/session/${sessionId}`)); } catch {}
+      try {
+        const info = typeof client.getSession === "function"
+          ? await client.getSession(sessionId)
+          : await client.get(`/session/${sessionId}`);
+        if (info) this.store.upsertSession(url, info);
+      } catch {}
     };
 
     switch (action) {
-      case "model":
+      case "model": {
         if (!value?.id || !value?.providerID) throw new Error("model id and providerID required");
-        await client.setModel(sessionId, { id: value.id, providerID: value.providerID, variant: value.variant ?? "default" });
+        const ref = modelRef(value);
+        await client.setModel(sessionId, ref);
         await refresh();
-        return { ok: true, model: value };
+        writeConfig({ lastModel: ref });
+        return { ok: true, model: ref };
+      }
       case "agent":
         if (!value) throw new Error("agent required");
         await client.setAgent(sessionId, value);
         await refresh();
+        writeConfig({ lastAgent: value });
         return { ok: true, agent: value };
+      case "move": {
+        if (!value?.directory) throw new Error("directory required");
+        if (typeof client.moveSession !== "function") throw new Error("moving sessions needs OpenCode 2");
+        const dir = this.hostDirectory(value.directory, entry);
+        await client.moveSession(sessionId, dir);
+        await refresh();
+        writeConfig({ lastDirectory: dir });
+        const session = this.store.snapshot().sessions.find((s) => s.id === sessionId) ?? null;
+        return { ok: true, directory: dir, session };
+      }
       case "compact": {
         const model = rec?.model;
         if (!model?.id || !model?.providerID) throw new Error("session has no model to summarize with");
@@ -489,14 +622,16 @@ class Hub {
     return entry.client.commands();
   }
 
-  async prompt({ server, sessionId, newSession, title, text, command, directory }) {
-    // A new chat in an explicit folder must land in THAT folder's server, not the
-    // default one. ensureWorkspace reuses an attached server for the directory or
-    // spawns one (and refuses Linux paths on Windows).
+  async prompt({ server, sessionId, newSession, title, text, command, directory, model, agent }) {
+    // A new chat with an explicit directory: v2 servers host any location, so use
+    // one of them instead of spawning a server per folder. v1 falls back to the
+    // old server-per-directory behaviour inside resolveDirectory.
     let url = null;
-    if (!sessionId && !server && directory) {
-      const ws = await this.ensureWorkspace(directory);
-      url = ws.server;
+    let dir = null;
+    if (!sessionId && directory) {
+      const loc = await this.resolveDirectory(directory, server);
+      url = loc.server;
+      dir = loc.directory;
     } else {
       url = this.pickServer(server);
     }
@@ -509,9 +644,21 @@ class Hub {
     const { client } = entry;
     let id = sessionId;
     if (!id || newSession) {
-      const sess = await client.createSession(title ? { title } : {});
+      const opts = {};
+      if (title) opts.title = title;
+      if (agent) opts.agent = agent;
+      if (model) opts.model = modelRef(model);
+      if (dir && client.version === "2") opts.location = { directory: dir };
+      const sess = await client.createSession(opts);
       id = sess.id;
       this.store.upsertSession(url, sess);
+      const lastDirectory = dir || sess.directory || readConfig().lastDirectory;
+      if (lastDirectory) {
+        const patch = { lastDirectory };
+        if (model) patch.lastModel = modelRef(model);
+        if (agent) patch.lastAgent = agent;
+        writeConfig(patch);
+      }
     }
     const rec = this.store.sessions.get(`${url}::${id}`);
     if (rec) {
@@ -527,7 +674,8 @@ class Hub {
     } else {
       await client.prompt(id, text);
     }
-    return { server: url, sessionId: id };
+    const session = this.store.snapshot().sessions.find((s) => s.id === id) ?? null;
+    return { server: url, sessionId: id, session };
   }
 
   // Destructive: removes the session in OpenCode. Not wired to any UI control.
@@ -625,7 +773,8 @@ for (const entry of args.servers) await hub.attach(entry.url, { password: entry.
 for (const entry of readConfig().servers ?? []) {
   const url = typeof entry === "string" ? entry : entry.url;
   const password = typeof entry === "string" ? null : entry.password ?? null;
-  if (url && !args.servers.includes(url)) await hub.attach(url, { password }).catch(() => {});
+  const distro = typeof entry === "string" ? null : entry.distro ?? null;
+  if (url && !args.servers.includes(url)) await hub.attach(url, { password, distro }).catch(() => {});
 }
 await hub.discover();
 setInterval(() => { void hub.discover(); }, 10_000);

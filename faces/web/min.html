@@ -262,6 +262,7 @@ const B="";
 let state={pet:{state:"idle"},sessions:[],permissions:[],servers:[]};
 let finishedIds=[], prevStates=new Map(), firstRender=false;   // sessions that ended while we were watching
 let expanded=IS_PANEL, selected=null, view="chat", filter="all", commands=[], newDir=null, workspaces=[];
+let draft=null, defaults=null; // a new chat before its first message
 if(IS_PANEL) document.body.classList.add("expanded"); // the panel window only exists while open
 
 /* ---------------- sprite ---------------- */
@@ -328,7 +329,23 @@ function setExpanded(on){
   document.body.classList.toggle("expanded",on);
   document.body.classList.toggle("minimized",!on);
 }
-function showView(v){ view=v; render(); }
+function showView(v){ view=v; if(v!=="chat") draft=null; render(); }
+function startDraft(){
+  const base=defaults||{};
+  draft={
+    directory: base.directory || workspaces[0]?.directory || null,
+    server: base.server || null,
+    model: base.model || null,
+    agent: base.agent || null,
+  };
+  selected=null; msgSession=""; msgKey=""; msgSeq++;
+  if(msgTimer) clearTimeout(msgTimer);
+  view="chat"; expanded=true;
+  document.body.classList.add("expanded");
+  closePalette(); hideCtx();
+  render();
+  setTimeout(()=>$("#prompt")?.focus(),30);
+}
 const currentSession=()=>state.sessions.find(s=>s.id===selected)||null;
 
 /* ---------------- rendering ---------------- */
@@ -389,18 +406,28 @@ function renderPerms(){
 }
 function renderDetail(){
   const s=currentSession();
+  const d = view==="chat" && !s ? draft : null;
   $("#dstate").className="chip "+(s?s.state:"idle");
-  $("#dstate").textContent=s?s.state:"idle";
+  $("#dstate").textContent=s?s.state:(d?"new":"idle");
   $("#dtitle").textContent = view==="new" ? "New chat"
     : view==="pets" ? "Pets" : view==="settings" ? "Settings"
-    : s?s.title:"Nothing selected";
+    : d ? "New chat" : s?s.title:"Nothing selected";
   $("#dabort").style.display = s&&s.state==="running" ? "" : "none";
-  $("#dmeta").textContent = s ? [s.model?.id, s.agent].filter(Boolean).join(" · ") : "";
+  const dirName = d?.directory ? d.directory.split(/[\\/]/).filter(Boolean).pop() : "";
+  $("#dmeta").textContent = s ? [s.model?.id, s.agent].filter(Boolean).join(" · ")
+    : d ? [dirName || "no folder", d.model?.id || "default model", d.agent].filter(Boolean).join(" · ") : "";
   const body=$("#dbody");
   if(view!=="chat"){ msgSession=""; msgKey=""; }
   if(view==="new"){ body.innerHTML=newChatHtml(); updateToBottom(); return; }
   if(view==="pets"){ body.innerHTML=petsHtml(); updateToBottom(); return; }
   if(view==="settings"){ body.innerHTML=settingsHtml(); updateToBottom(); return; }
+  if(d){
+    body.innerHTML=`<div class="empty" style="padding:26px 10px">New chat${
+      d.directory?`<div class="ssub" style="margin-top:4px;overflow-wrap:anywhere">${esc(d.directory)}</div>`:""}
+      <div class="ssub" style="margin-top:10px">/cd to change directory · /model to pick a model</div></div>`;
+    updateToBottom();
+    return;
+  }
   if(!s){ msgSession=""; body.innerHTML=`<div class="empty">pick a session, or press + for a new chat</div>`; updateToBottom(); return; }
   // Only show the placeholder when the session actually changed. Re-rendering the
   // same chat must not replace it with "loading…" and then early-return.
@@ -641,13 +668,13 @@ document.addEventListener("click",async e=>{
   const row=e.target.closest("[data-session]");
   if(row){
     if(!IS_PANEL){ api.panel({open:true,sessionId:row.dataset.session}); return; }
-    selected=row.dataset.session; msgKey=""; showView("chat"); return;
+    draft=null; selected=row.dataset.session; msgKey=""; showView("chat"); return;
   }
   const pet=e.target.closest("[data-pet]");
   if(pet){ try{ await post("/api/pets/active",{id:pet.dataset.pet}); await loadPet(); renderPetsList(); }catch(err){} return; }
   const face=e.target.closest("[data-facing]");
   if(face){ facing=face.dataset.facing; applyFacing(); api.setFacing(facing); render(); return; }
-  if(e.target.id==="btnNew"){ openMini(); return; }
+  if(e.target.id==="btnNew"){ startDraft(); return; }
   if(e.target.id==="miniX"){ setExpanded(false); return; }
   if(e.target.id==="miniDirBtn"){ const r=await api.pickFolder(); if(r&&r.ok){ newDir=r.path; $("#miniDir").textContent=r.path; } return; }
   if(e.target.id==="miniGo"){ await startMini(); return; }
@@ -704,8 +731,9 @@ async function startNewChat(){
 // commands (init/review/…), because /model, /new, /share and friends are TUI-client
 // commands that never reach the server. Those are re-implemented here on the API.
 const PET_CMDS=[
-  {name:"new",      d:"start a chat in a folder",           run:()=>{ setExpanded(true); newDir=workspaces[0]?.directory||null; showView("new"); }},
-  {name:"sessions", d:"show the session list",              run:()=>{ setExpanded(true); showView("chat"); }},
+  {name:"new",      d:"start a blank chat",                 run:()=>{ startDraft(); }},
+  {name:"sessions", d:"show the session list",              run:()=>{ draft=null; setExpanded(true); showView("chat"); }},
+  {name:"cd",       d:"change the working directory",       run:()=>{ $("#prompt").value="/cd "; $("#prompt").focus(); }},
   {name:"model",    d:"switch the model for this session",  pick:"model"},
   {name:"agent",    d:"switch agent (build, plan, explore)",pick:"agent"},
   {name:"compact",  d:"summarize this conversation",        act:"compact"},
@@ -718,7 +746,7 @@ const PET_CMDS=[
   {name:"settings", d:"facing, config, paths",              run:()=>{ setExpanded(true); showView("settings"); }},
   {name:"help",     d:"list available commands",            run:()=>{ setExpanded(true); openPalette(""); }},
 ];
-let modelsList=[], agentsList=[], palMode="root";
+let modelsList=[], agentsList=[], palMode="root", modelsKey="", agentsKey="";
 
 const pal=$("#palette"); let palSel=0, palItems=[];
 async function loadCommands(){
@@ -729,19 +757,23 @@ async function loadCommands(){
   }catch{ commands=[]; }
 }
 async function ensureModels(){
-  if(modelsList.length) return modelsList;
-  const s=currentSession();
+  const srv=currentSession()?.server || draft?.server || null;
+  const key=srv||"";
+  if(modelsList.length && modelsKey===key) return modelsList;
+  modelsKey=key;
   try{
-    const q=s?`?server=${encodeURIComponent(s.server)}`:"";
+    const q=srv?`?server=${encodeURIComponent(srv)}`:"";
     modelsList=(await (await fetch("/api/models"+q)).json()).models||[];
   }catch{ modelsList=[]; }
   return modelsList;
 }
 async function ensureAgents(){
-  if(agentsList.length) return agentsList;
-  const s=currentSession();
+  const srv=currentSession()?.server || draft?.server || null;
+  const key=srv||"";
+  if(agentsList.length && agentsKey===key) return agentsList;
+  agentsKey=key;
   try{
-    const q=s?`?server=${encodeURIComponent(s.server)}`:"";
+    const q=srv?`?server=${encodeURIComponent(srv)}`:"";
     agentsList=(await (await fetch("/api/agents"+q)).json()).agents||[];
   }catch{ agentsList=[]; }
   return agentsList;
@@ -773,10 +805,19 @@ async function choosePalette(i){
   const it=palItems[i]; if(!it) return;
   if(it.kind==="command"){ $("#prompt").value=it.label+" "; closePalette(); $("#prompt").focus(); return; }
   if(it.kind==="model"||it.kind==="agent"){
+    if(!currentSession()&&!draft) startDraft();
     const s=currentSession();
+    const value=it.kind==="model"
+      ? {id:it.value.id, providerID:it.value.providerID, variant:it.value.variant ?? "default"}
+      : it.value;
+    if(!s && draft){
+      if(it.kind==="model") draft.model=value; else draft.agent=value;
+      closePalette(); $("#prompt").value=""; render(); return;
+    }
     if(!s){ closePalette(); return; }
-    try{ await post("/api/session/action",{server:s.server,sessionId:s.id,action:it.kind,value:it.value}); }catch(e){ alert(String(e)); }
-    closePalette(); $("#prompt").value=""; msgKey=""; return;
+    try{ await post("/api/session/action",{server:s.server,sessionId:s.id,action:it.kind,value}); }catch(e){ alert(String(e)); }
+    if(defaults){ if(it.kind==="model") defaults.model=value; else defaults.agent=value; }
+    closePalette(); $("#prompt").value=""; msgKey=""; render(); return;
   }
   const cmd=PET_CMDS.find(c=>"/"+c.name===it.label);
   closePalette(); $("#prompt").value="";
@@ -794,7 +835,7 @@ async function forkSession(s){
     // for the next state snapshot
     if(r.session) state.sessions=state.sessions.filter(x=>x.id!==r.session.id).concat(r.session);
     const id=r.sessionId||r.session?.id;
-    if(id){ selected=id; msgKey=""; view="chat"; render(); }
+    if(id){ draft=null; selected=id; msgKey=""; view="chat"; render(); }
     return r;
   }catch(e){ alert(String(e)); }
 }
@@ -806,6 +847,36 @@ async function runAction(act){
     if(act==="fork"){ await forkSession(s); return; }
     const r=await post("/api/session/action",{server:s.server,sessionId:s.id,action:act});
     if(act==="share"&&r.url){ try{ await navigator.clipboard.writeText(r.url); alert("Share link copied:\n"+r.url); }catch{ alert("Share link:\n"+r.url); } }
+  }catch(e){ alert(String(e)); }
+}
+
+// /cd: validate a draft directory, or move an existing session (v2).
+async function changeDir(p){
+  const s=currentSession();
+  const dir=String(p||"").trim().replace(/^(["'])(.*)\1$/,"$2");
+  if(!dir){
+    const cur=s?.directory || draft?.directory;
+    alert(cur?`current directory:\n${cur}`:"usage: /cd /path");
+    return;
+  }
+  try{
+    if(s){
+      const r=await post("/api/session/action",{server:s.server,sessionId:s.id,action:"move",value:{directory:dir}});
+      if(r.session) state.sessions=state.sessions.filter(x=>x.id!==r.session.id).concat(r.session);
+      if(defaults) defaults.directory=r.directory||dir;
+      render();
+      return;
+    }
+    if(!draft) startDraft();
+    const prevServer=draft?.server||null;
+    const r=await post("/api/checkdir",{directory:dir,server:prevServer});
+    draft={...(draft||{}),directory:r.directory,server:r.server||null};
+    if(prevServer && r.server!==prevServer){
+      draft.model=null; draft.agent=null;
+      modelsList=[]; agentsList=[]; modelsKey=""; agentsKey="";
+    }
+    if(defaults) defaults.directory=r.directory;
+    render();
   }catch(e){ alert(String(e)); }
 }
 
@@ -837,6 +908,20 @@ $("#composer").addEventListener("submit",async e=>{
   e.preventDefault();
   const raw=$("#prompt").value.trim(); if(!raw) return;
   const s=currentSession();
+  // the first message of a draft (or of the empty panel) creates the session at
+  // the draft's directory/model and sends in one go
+  const pending = () => draft || {
+    directory: defaults?.directory || null,
+    server: defaults?.server || null,
+    model: defaults?.model || null,
+    agent: defaults?.agent || null,
+  };
+
+  if(raw==="/cd"||raw.startsWith("/cd ")){
+    $("#prompt").value="";
+    await changeDir(raw.slice(3).trim());
+    return;
+  }
 
   // a pet command typed in full runs locally (/model, /undo, …)
   if(raw.startsWith("/")){
@@ -844,15 +929,42 @@ $("#composer").addEventListener("submit",async e=>{
     const pet=PET_CMDS.find(c=>c.name===name);
     if(pet){
       $("#prompt").value="";
-      if(pet.pick==="model"){ await ensureModels(); openPalette("","models"); return; }
-      if(pet.pick==="agent"){ await ensureAgents(); openPalette("","agents"); return; }
+      if(pet.pick==="model"){ if(!currentSession()&&!draft) startDraft(); await ensureModels(); openPalette("","models"); return; }
+      if(pet.pick==="agent"){ if(!currentSession()&&!draft) startDraft(); await ensureAgents(); openPalette("","agents"); return; }
       if(pet.run) return pet.run();
       if(pet.act) return runAction(pet.act);
+    }
+    if(!s){
+      const d=pending();
+      try{
+        const r=await post("/api/prompt",{newSession:true,server:d.server,directory:d.directory,model:d.model,agent:d.agent,
+          command:name,text:rest.join(" "),title:`/${name}`});
+        if(r.session) state.sessions=state.sessions.filter(x=>x.id!==r.session.id).concat(r.session);
+        draft=null; selected=r.sessionId; msgKey=""; msgSession=""; view="chat"; render();
+      }catch(err){ alert(String(err)); }
+      return;
     }
     try{
       await post("/api/prompt",{sessionId:s?s.id:null,server:s?s.server:null,newSession:!s,
         command:name,text:rest.join(" "),title:`/${name}`});
       $("#prompt").value=""; msgKey="";
+    }catch(err){ alert(String(err)); }
+    return;
+  }
+
+  if(!s){
+    const d=pending();
+    try{
+      const r=await post("/api/prompt",{newSession:true,text:raw,directory:d.directory,server:d.server,model:d.model,agent:d.agent});
+      if(r.session) state.sessions=state.sessions.filter(x=>x.id!==r.session.id).concat(r.session);
+      draft=null; selected=r.sessionId; msgKey=""; msgSession=""; view="chat";
+      if(defaults){
+        if(r.session?.directory || d.directory) defaults.directory=r.session?.directory || d.directory;
+        if(r.server) defaults.server=r.server;
+        if(d.model) defaults.model=d.model;
+        if(d.agent) defaults.agent=d.agent;
+      }
+      render();
     }catch(err){ alert(String(err)); }
     return;
   }
@@ -908,7 +1020,7 @@ cv.addEventListener("contextmenu",e=>{
 ctx.addEventListener("click",async e=>{
   const btn=e.target.closest("[data-act]"); const act=btn?.dataset.act; if(!act) return;
   const sid=btn?.dataset.sid; hideCtx();
-  if(act==="s-open"){ selected=sid; msgKey=""; setExpanded(true); showView("chat"); return; }
+  if(act==="s-open"){ draft=null; selected=sid; msgKey=""; setExpanded(true); showView("chat"); return; }
   if(act==="s-fork"){ const s=state.sessions.find(x=>x.id===sid); if(s) await forkSession(s); return; }
   if(act==="s-abort"){ const s=state.sessions.find(x=>x.id===sid); if(s) try{ await post("/api/abort",{server:s.server,sessionId:s.id}); }catch(err){} return; }
   if(act==="s-hide"){ const s=state.sessions.find(x=>x.id===sid); if(!s) return;
@@ -917,7 +1029,7 @@ ctx.addEventListener("click",async e=>{
       if(selected===sid){ selected=null; msgKey=""; } }catch(err){ alert(String(err)); }
     return; }
   if(act==="s-unhide"){ try{ await post("/api/session/hide",{sessionId:sid,hidden:false}); }catch(err){ alert(String(err)); } return; }
-  if(act==="new"){ openMini(); }
+  if(act==="new"){ startDraft(); }
   if(act==="sessions"){ setExpanded(true); showView("chat"); }
   if(act==="pets"){ setExpanded(true); showView("pets"); }
   if(act==="settings"){ setExpanded(true); showView("settings"); }
@@ -948,7 +1060,7 @@ window.addEventListener("keydown",e=>{
   if(e.ctrlKey&&e.key.toLowerCase()==="n"){
     e.preventDefault();
     if(IS_PET) api.panel({open:true,action:"new"});
-    else if(IS_PANEL) openMini();
+    else if(IS_PANEL) startDraft();
   }
 });
 
@@ -996,18 +1108,22 @@ if(api.onPanelCommand) api.onPanelCommand(c=>{
   if(!IS_PANEL) return;
   expanded=true;
   document.body.classList.add("expanded");
-  if(c.action==="new"){ openMini(); return; }
+  if(c.action==="new"){ startDraft(); return; }
   if(document.body.classList.contains("mini-open")){
     document.body.classList.remove("mini-open");
     api.panelSize({full:true});
   }
-  if(c.sessionId){ selected=c.sessionId; view="chat"; msgKey=""; }
-  if(c.view) view=c.view;
+  if(c.sessionId){ draft=null; selected=c.sessionId; view="chat"; msgKey=""; }
+  else if(c.view){ draft=null; view=c.view; }
+  // a bare open keeps whatever the panel was showing (draft or session)
   render();
 });
 
 async function loadWorkspaces(){
   try{ workspaces=(await (await fetch("/api/workspaces")).json()).workspaces||[]; }catch{ workspaces=[]; }
+}
+async function loadDefaults(){
+  try{ defaults=await (await fetch("/api/defaults")).json(); }catch{ defaults=null; }
 }
 function connect(){
   const es=new EventSource("/api/events");
@@ -1017,7 +1133,7 @@ function connect(){
   });
   es.onerror=()=>{ es.close(); setTimeout(connect,1500); };
 }
-(async ()=>{ await loadPet(); await loadWorkspaces(); await loadCommands(); connect(); render(); })();
+(async ()=>{ await loadDefaults(); await loadPet(); await loadWorkspaces(); await loadCommands(); connect(); render(); })();
 setInterval(()=>{ loadPet(); },4000);
 setInterval(()=>{ loadWorkspaces(); loadCommands(); },15000);
 </script></body></html>

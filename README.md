@@ -52,9 +52,11 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
 1. **Click the pet** — the panel opens in its own window next to her; click again to close.
 2. **Drag her** anywhere, including to the very top of the screen. Double-click flips the
    sprite horizontally.
-3. **`+`** opens a compact popover: type a request, pick a folder, start a chat.
+3. **`+`** opens a blank chat in the last used directory (or the server's default).
+   Type `/cd /path` to change it, `/model` to pick a model, then send the first message.
 4. **`/` in the composer** lists commands — agent ones (`/init`, `/review`) and pet ones
-   (`/fork`, `/model`, `/agent`, `/compact`, `/undo`, `/redo`, `/share`, `/abort`, `/pets`).
+   (`/cd`, `/fork`, `/model`, `/agent`, `/compact`, `/undo`, `/redo`, `/share`, `/abort`,
+   `/pets`).
 5. **Right-click a session or bubble → Hide from pet** to clear finished work out of the
    way. Nothing is deleted; Settings has an *unhide* list.
 
@@ -82,9 +84,12 @@ anything that finished in the last 15 minutes.
 **Approvals** — permission requests are rendered as buttons: *once*, *always*, *reject*.
 Answered from the pet, the TUI never has to be found.
 
-**Chat** — type into any session from the panel, or start a new one. A folder without a
-running server gets its own `opencode serve` (Windows paths only — a Linux path must be an
-attached WSL server, and the brain says so instead of guessing). Messages render markdown:
+**Chat** — type into any session from the panel, or start a new one. `+` opens a blank
+chat; `/cd` validates and sets the directory (on v2 it moves an existing session), and
+`/model` / `/agent` work in the draft as well as on a session. The first message creates
+the session at the chosen location with the chosen model — no folder picker, no untitled
+session left behind. OpenCode 2 hosts sessions at arbitrary locations on one server; v1
+keeps the old server-per-directory spawn. Messages render markdown:
 headings, lists, tables, links, inline code, and fenced code blocks with a language label
 and a copy button. Rendering is local and dependency-free, and everything is HTML-escaped
 before markup is added.
@@ -96,8 +101,9 @@ steps that only contain thinking/tool calls are grouped into one collapsed trace
 their input/output. Provider errors stay visible as a compact line (muted for aborted
 steps, red for provider failures).
 
-**New chat popover** — prompt, folder, start; four lines instead of a full panel. `Ctrl+N`
-and the pet's right-click menu reach the same thing.
+**New chat** — a blank chat with the last directory and model shown in the header. `Ctrl+N`
+and the pet's right-click *New chat* reach the same thing. `/cd` and `/model` apply to the
+draft until the first message creates the session.
 
 **Pet packs** — Codex/OpenPets-compatible spritesheets (192×208 cells, 8 columns). A
 red-armoured chibi knight ships in the repo and is installed by default; any `.zip` or
@@ -210,8 +216,9 @@ default `steer` is dropped when no turn is running), messages are newest-first w
 `content[]` instead of `parts[]` and user text at `m.text`, permission replies use
 `{action, resources}`, `/fork` is wired (`POST /api/session/{id}/fork`; the
 `session.forked` event is translated into a session fetch so the child's
-"… (fork #N)" title shows at once), and `/model`, `/agent`, `/compact`, `/share`,
-`/undo`, `/redo` are **not wired for v2**.
+"… (fork #N)" title shows at once), `/model`/`/agent` use the v2 session routes,
+`/cd` uses `POST /api/session/{id}/move`, and `/compact`, `/share`, `/undo`, `/redo`
+are **not wired for v2**.
 
 ---
 
@@ -219,7 +226,7 @@ default `steer` is dropped when no turn is running), messages are newest-first w
 
 | Path | What |
 | --- | --- |
-| `~/.cute-pets/config.json` | `facing`, `activePet`, attached `servers` (with credentials) |
+| `~/.cute-pets/config.json` | `facing`, `activePet`, attached `servers` (with credentials), `lastDirectory`, `lastModel`, `lastAgent` |
 | `pets/<id>/` (repo) | packs that ship with cute-pets: `chibi-knight` |
 | `~/.cute-pets/pets/<id>/` | installed pet packs (the built-in one is copied here on first run) |
 | `~/.cute-pets/hidden.json` | sessions hidden from the pet |
@@ -250,12 +257,14 @@ POST /api/pets/import      {path}            .zip or folder
 POST /api/pets/active      {id}
 GET  /api/commands         agent commands from OpenCode (init, review, …)
 GET  /api/models  /api/agents  /api/workspaces
-POST /api/prompt           {text, sessionId?|newSession, directory?, model?, agent?}
+GET  /api/defaults         {directory, server, model, agent}   last used / server default
+POST /api/checkdir         {directory, server?}  validate a path (v2; WSL-aware)
+POST /api/prompt           {text, sessionId?|newSession, directory?, server?, model?, agent?}
 GET  /api/messages         ?server=&sessionId=&limit=
 POST /api/permission       {id, reply: once|always|reject}
 POST /api/abort            {server, sessionId}
 POST /api/session/hide     {sessionId, hidden:true|false}
-POST /api/session/action   {sessionId, action: fork|compact|undo|redo|share|model|agent, …}
+POST /api/session/action   {sessionId, action: move|fork|compact|undo|redo|share|model|agent, …}
 POST /api/attach  /api/detach  /api/announce
 POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI uses it
 ```
@@ -264,8 +273,10 @@ POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI 
 
 ## Limitations
 
-- OpenCode 2: model switch, agent switch, compact, share, undo/redo are v1-only;
-  fork works on both.
+- OpenCode 2: compact, share, undo/redo are v1-only; fork, model/agent switch and
+  moving a session between directories (`/cd`) work on v2.
+- `/cd` cannot move a v1 session (the v1 server is bound to one directory); start a
+  new chat there instead.
 - The chat loads the last 30 messages only; older history is not paged in yet.
 - Permission replies on v2 use `{action, resources}`; that path has not been exercised
   against a live request.
