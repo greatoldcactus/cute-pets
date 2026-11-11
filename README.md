@@ -83,9 +83,9 @@ tail of the last message.
 
 **Plan mode** — `/plan` switches the selected session (or the draft) to OpenCode's
 read-only `plan` agent. The pet turns violet, uses the spritesheet's review row (row 8)
-with a violet aura, and the session/bubble gets a ✦ marker. When a plan finishes it keeps
-a violet **✦ plan ready** bubble instead of the normal ✓. `/build` switches back. A pack
-that has no review pose simply keeps its idle frame; the violet aura still marks the mode.
+with a violet aura. When a plan finishes it keeps a violet **plan ready** bubble instead
+of the normal ✓. `/build` switches back. A pack that has no review pose simply keeps its
+idle frame; the violet aura still marks the mode.
 
 **Questions (v2 forms)** — when the agent asks via OpenCode 2's form API, the session
 becomes `waiting` and a compact form card appears above the composer. It supports text,
@@ -262,7 +262,7 @@ are **not wired for v2**.
 
 | Path | What |
 | --- | --- |
-| `~/.cute-pets/config.json` | `facing`, `activePet`, attached `servers` (with credentials), `lastDirectory`, `lastModel`, `lastAgent`, `petPosition` |
+| `~/.cute-pets/config.json` | `facing`, `auras`, `activePet`, attached `servers` (with credentials), `lastDirectory`, `lastModel`, `lastAgent`, `petPosition` |
 | `pets/<id>/` (repo) | packs that ship with cute-pets: `chibi-knight` |
 | `~/.cute-pets/pets/<id>/` | installed pet packs (the built-in one is copied here on first run) |
 | `~/.cute-pets/hidden.json` | sessions hidden from the pet |
@@ -277,6 +277,9 @@ Facing is a config value, never inferred from screen position:
 
 `right` (default) is the sprite as authored, `left` is mirrored. Override per launch with
 `npm run shell -- --facing left`.
+
+Auras are on by default: idle is green, running blue, waiting amber, error red, and plan
+violet. Turn them all off with Settings → Auras or `{ "auras": false }` in the config.
 
 The pet remembers where it was left as `petPosition` (screen coordinates). It is restored
 only if that spot still overlaps a display; otherwise the pet is clamped back on-screen.
