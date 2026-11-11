@@ -73,7 +73,10 @@ Two traps found the hard way:
 
 Per session: `running` (busy), `waiting` (approval, agent form/question, or plan answer
 pending), `error` (retry / session.error), `idle`. Priority for the pet and for list
-order: `waiting > error > running > idle`.
+order: `waiting > error > running > idle`. Within a priority, sessions are sorted by
+`updatedAt` (newest first). `updatedAt` uses the server's `session.time.updated` and local
+message/activity events; periodic syncs do not refresh it, so idle order stays stable and
+reflects the last real update.
 
 | Input | Effect |
 | --- | --- |
