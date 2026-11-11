@@ -565,14 +565,15 @@ class Hub {
     const entry = url && this.clients.get(url);
     if (!entry || !sessionId) throw new Error("server and sessionId required");
     const raw = await entry.client.messages(sessionId, limit);
+    // The clients normalize text, reasoning, tool and file parts; the face decides
+    // which of them to show collapsed (tool calls, thinking, errors).
     return (raw ?? []).map((m) => ({
       id: m.info?.id,
       role: m.info?.role ?? "unknown",
       time: m.info?.time?.created ?? null,
       tokens: m.info?.tokens ?? null,
-      parts: (m.parts ?? [])
-        .filter((p) => p.type === "text" && p.text)
-        .map((p) => ({ type: p.type, text: p.text })),
+      error: m.info?.error ?? null,
+      parts: m.parts ?? [],
     }));
   }
 
