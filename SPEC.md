@@ -92,6 +92,11 @@ label like "2 need you" / "1 failed" / "3 working" / "all done". If the driving 
 uses the `plan` agent and is not idle, the snapshot's `pet.plan` is true and the kind is
 `planning`.
 
+Message errors are rendered as fatal (red) only when the turn did not continue: if an
+assistant message without an error follows before the next user message, the earlier error
+was retried and is shown muted as `retried`. The same rule keeps the collapsed process
+trace from turning red for a recovered provider/tool failure.
+
 ## 5. Face API (stable contract)
 
 - `GET /api/state` — snapshot `{generatedAt, pet, servers[], sessions[], permissions[], forms[]}`
@@ -213,6 +218,12 @@ persisting later; it is desktop-owned state, not a session concern.
   `multiselect` and `external`; the answer is `{key: value}` and an external field must be
   acknowledged with `true`. The brain fetches forms per session directory, turns a
   pending form into `waiting`, and exposes the answer route as `POST /api/form`.
+- **Plan mode uses a synthetic turn.** Creating a session with the `plan` agent (or
+  switching to it) enqueues a `synthetic` message with `delivery:"steer"` containing the
+  Plan-mode reminder, and that starts an execution immediately. The brain checks the
+  session inbox; when that reminder is still pending (or the session is already running)
+  it sends the first user prompt with `delivery:"steer"` too, so both are delivered into
+  the same turn. Queueing would make the model answer the reminder alone first.
 - **Directories are server-side.** v2 servers host sessions at arbitrary locations on
   one server; v1 servers are bound to one cwd and need a spawned server per directory.
   `/cd` validates the path on the brain host (or maps a WSL POSIX path through

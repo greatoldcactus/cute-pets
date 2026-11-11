@@ -438,12 +438,13 @@ function renderPerms(){
 function renderDetail(){
   const s=currentSession();
   const d = view==="chat" && !s ? draft : null;
-  const isPlan=Boolean(s&&s.agent==="plan");
+  const isPlan=Boolean((s&&s.agent==="plan")||(d&&d.agent==="plan"));
   $("#dstate").className="chip "+(s?s.state:"idle")+(isPlan?" plan":"");
-  $("#dstate").textContent=s?(isPlan&&s.state==="running"?"plan":isPlan&&s.state==="waiting"?"plan · answer":s.state):(d?"new":"idle");
+  $("#dstate").textContent=s?(isPlan&&s.state==="running"?"plan":isPlan&&s.state==="waiting"?"plan · answer":s.state)
+    :d?(isPlan?"plan":"new"):"idle";
   $("#dtitle").textContent = view==="new" ? "New chat"
     : view==="pets" ? "Pets" : view==="settings" ? "Settings"
-    : d ? "New chat" : s?(isPlan?"✦ ":"")+s.title:"Nothing selected";
+    : d ? (isPlan?"✦ New plan chat":"New chat") : s?(isPlan?"✦ ":"")+s.title:"Nothing selected";
   $("#dabort").style.display = s&&s.state==="running" ? "" : "none";
   const dirName = d?.directory ? d.directory.split(/[\\/]/).filter(Boolean).pop() : "";
   $("#dmeta").textContent = s ? [s.model?.id, s.agent].filter(Boolean).join(" · ")
@@ -455,8 +456,9 @@ function renderDetail(){
   if(view==="pets"){ body.innerHTML=petsHtml(); updateToBottom(); return; }
   if(view==="settings"){ body.innerHTML=settingsHtml(); updateToBottom(); return; }
   if(d){
-    body.innerHTML=`<div class="empty" style="padding:26px 10px">New chat${
+    body.innerHTML=`<div class="empty" style="padding:26px 10px">${isPlan?"✦ Plan mode":"New chat"}${
       d.directory?`<div class="ssub" style="margin-top:4px;overflow-wrap:anywhere">${esc(d.directory)}</div>`:""}
+      ${isPlan?`<div class="ssub" style="margin-top:10px;color:var(--plan)">Read-only planning · /build to implement</div>`:""}
       <div class="ssub" style="margin-top:10px">/cd to change directory · /model to pick a model</div></div>`;
     updateToBottom();
     return;
@@ -480,13 +482,13 @@ function updateToBottom(){
   if(!b||!to) return;
   to.classList.toggle("on", b.scrollHeight-b.scrollTop-b.clientHeight>80);
 }
-function messageError(err){
+function messageError(err, recovered = false){
   if(!err) return "";
   const type=err.type||"error";
   const msg=err.message||err.data?.message||(typeof err==="string"?err:JSON.stringify(err));
-  const muted=/aborted|interrupt/i.test(type+" "+msg);
+  const muted=recovered||/aborted|interrupt/i.test(type+" "+msg);
   const short=msg.length>220?msg.slice(0,220)+"…":msg;
-  return `<div class="msg-error${muted?" muted":""}" title="${esc(msg)}">${esc(type)} · ${esc(short)}</div>`;
+  return `<div class="msg-error${muted?" muted":""}" title="${esc(msg)}">${esc(recovered?"retried":type)} · ${esc(short)}</div>`;
 }
 function renderPart(p,mid,i){
   if(p.type==="tool"){
@@ -518,9 +520,10 @@ function messageTrace(m,mid,above){
   if(nThink) bits.push(`${nThink} thinking`);
   if(nFile) bits.push(`${nFile} file${nFile>1?"s":""}`);
   if(nSys) bits.push(`${nSys} system`);
-  const hasErr=tools.some(t=>/error|failed/i.test(String(t.status)));
+  // A tool failure is usually handled by the next step; only fatal message
+  // errors colour the trace, and those are rendered by renderProcess.
   return `<details class="trace${above?" above":""}" data-k="${esc(mid)}:trace">`+
-    `<summary class="${hasErr?"has-error":""}">${esc(bits.join(" · "))||"trace"}</summary>`+
+    `<summary>${esc(bits.join(" · "))||"trace"}</summary>`+
     `<div class="tracebody">${extras.map((p,i)=>renderPart(p,mid,i)).join("")}</div></details>`;
 }
 function renderMessage(m){
@@ -535,7 +538,23 @@ function renderMessage(m){
   const firstExtra=parts.findIndex(p=>p.type!=="text");
   const above=firstExtra>=0 && (firstText<0 || firstExtra<firstText);
   const trace=messageTrace(m,mid,above);
-  return `<div class="msg ${role}">${above?trace:""}${text?CPMarkdown.toHtml(text):""}${messageError(m.error)}${above?"":trace}</div>`;
+  return `<div class="msg ${role}">${above?trace:""}${text?CPMarkdown.toHtml(text):""}${messageError(m.error,Boolean(m.errorRecovered))}${above?"":trace}</div>`;
+}
+// An error is "recovered" when the same turn continued with another assistant
+// message before the next user prompt. Provider retries (429/transport) look
+// like that; a turn that truly failed has nothing after it and stays red.
+function markRecoveredErrors(rows){
+  for(let i=0;i<rows.length;i++){
+    const m=rows[i];
+    if(!m.error) continue;
+    let recovered=false;
+    for(let j=i+1;j<rows.length;j++){
+      const n=rows[j];
+      if(n.role==="user") break;
+      if(n.role==="assistant"&&!n.error){ recovered=true; break; }
+    }
+    m.errorRecovered=recovered;
+  }
 }
 // Consecutive assistant steps with no answer text are one process run. Collapsing
 // them into a single trace keeps a turn readable: one "N steps · M tools" line
@@ -560,24 +579,27 @@ function renderProcess(msgs){
   const nThink=parts.filter(p=>p.type==="reasoning").length;
   const nFile=parts.filter(p=>p.type==="file").length;
   const nSys=parts.filter(p=>p.type==="system").length;
-  const errs=[], seen=new Set();
+  const errs=[], seen=new Map();
   for(const m of msgs){
     const e=m.error; if(!e) continue;
-    const k=`${e.type}|${e.message}`; if(seen.has(k)) continue;
-    seen.add(k); errs.push(e);
+    const k=`${e.type}|${e.message}`;
+    const prev=seen.get(k);
+    if(prev) prev.recovered = prev.recovered && Boolean(m.errorRecovered);
+    else seen.set(k,{err:e, recovered:Boolean(m.errorRecovered)});
   }
+  errs.push(...seen.values());
   const bits=[`${msgs.length} step${msgs.length>1?"s":""}`];
   if(tools.length) bits.push(`${tools.length} tool${tools.length>1?"s":""}`);
   if(nThink) bits.push(`${nThink} thinking`);
   if(nFile) bits.push(`${nFile} file${nFile>1?"s":""}`);
   if(nSys) bits.push(`${nSys} system`);
-  const hasErr=errs.length||tools.some(t=>/error|failed/i.test(String(t.status)));
+  const hasErr=errs.some(e=>!e.recovered);
   const trace=parts.length
     ? `<details class="trace" data-k="${esc(key)}:trace"><summary class="${hasErr?"has-error":""}">`+
       `${esc(bits.join(" · "))}</summary><div class="tracebody">`+
       `${parts.map((p,i)=>renderPart(p,key,i)).join("")}</div></details>`
     : "";
-  return `<div class="msg assistant process">${errs.map(messageError).join("")}${trace}</div>`;
+  return `<div class="msg assistant process">${errs.map(e=>messageError(e.err,e.recovered)).join("")}${trace}</div>`;
 }
 async function loadMessages(s){
   if(!s) return;
@@ -586,8 +608,9 @@ async function loadMessages(s){
   try{
     const msgs=await (await fetch(`/api/messages?server=${encodeURIComponent(s.server)}&sessionId=${encodeURIComponent(s.id)}&limit=30`)).json();
     if(seq!==msgSeq||msgSession!==sk) return; // a newer session/load won
+    markRecoveredErrors(msgs||[]);
     const rows=(msgs||[]).filter(m=>(m.parts&&m.parts.length)||m.error);
-    const key=JSON.stringify(rows.map(m=>[m.id,m.error,m.parts]));
+    const key=JSON.stringify(rows.map(m=>[m.id,m.error,m.errorRecovered,m.parts]));
     if(key===msgKey){ updateToBottom(); return; } // already on screen
     msgKey=key;
     const body=$("#dbody");

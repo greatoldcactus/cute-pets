@@ -689,7 +689,20 @@ class Hub {
         writeConfig(patch);
       }
     }
-    const rec = this.store.sessions.get(`${url}::${id}`);
+    let rec = this.store.sessions.get(`${url}::${id}`);
+    const wasRunning = rec?.state === STATE.RUNNING;
+    let sessionAgent = agent ?? rec?.agent ?? null;
+    // A session switched to plan by another client may still look agent-less in
+    // our store; ask once so the next prompt can join its plan-mode turn.
+    if (!sessionAgent && client.version === "2" && typeof client.getSession === "function") {
+      const info = await client.getSession(id).catch(() => null);
+      if (info) {
+        this.store.upsertSession(url, info);
+        sessionAgent = info.agent ?? null;
+        rec = this.store.sessions.get(`${url}::${id}`);
+      }
+    }
+    const isPlan = sessionAgent === "plan";
     if (rec) {
       rec.state = STATE.RUNNING;
       rec.updatedAt = Date.now();
@@ -701,7 +714,19 @@ class Hub {
         .command(id, { command, args: text ?? "" })
         .catch((err) => log(`command ${command} failed: ${err.message ?? err}`));
     } else {
-      await client.prompt(id, text);
+      // Plan mode starts its own synthetic turn as soon as the session is created
+      // or switched to the plan agent. Queueing the first prompt would answer that
+      // synthetic reminder ("there is no request") before the user's message.
+      // Steering it into the same turn avoids the empty round-trip.
+      let extra = null;
+      if (client.version === "2" && isPlan) {
+        const pending = typeof client.inbox === "function"
+          ? await client.inbox(id).catch(() => [])
+          : [];
+        const planReminder = pending.some((item) => item.type === "synthetic" && item.delivery === "steer");
+        if (wasRunning || planReminder) extra = { delivery: "steer" };
+      }
+      await client.prompt(id, text, extra ?? undefined);
     }
     const session = this.store.snapshot().sessions.find((s) => s.id === id) ?? null;
     return { server: url, sessionId: id, session };

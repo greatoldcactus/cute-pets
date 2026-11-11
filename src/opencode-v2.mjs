@@ -120,6 +120,14 @@ export class OpenCodeV2Client {
     });
   }
 
+  // Durable inputs waiting to be delivered. Switching to the plan agent enqueues
+  // a synthetic "you are in Plan mode" steer message; seeing it lets the brain
+  // join the first prompt to that same turn instead of queueing an empty one.
+  async inbox(sessionId) {
+    const out = await this.#req(`/api/session/${enc(sessionId)}/inbox`);
+    return out?.data ?? [];
+  }
+
   async messages(id, limit = 20) {
     // Ask for the newest page instead of the whole history: tool inputs/outputs
     // can be large and the chat only needs the tail. The response is newest-first.
