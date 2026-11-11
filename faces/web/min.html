@@ -45,9 +45,31 @@ border:1px solid var(--line);color:var(--dim);flex:none;margin-top:1px}
 .dhead{padding:8px 11px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
 .dhead .t{font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
 .dbody{flex:1;overflow:auto;padding:9px 11px;display:flex;flex-direction:column;gap:7px}
-.msg{background:var(--card2);border-radius:9px;padding:6px 9px;font-size:11.5px;white-space:pre-wrap}
+.msg{background:var(--card2);border-radius:9px;padding:6px 9px;font-size:11.5px;white-space:normal;overflow-wrap:anywhere}
 .msg.user{border-left:2px solid #3d4460;color:#c6ccdf}
 .msg.assistant{border-left:2px solid var(--run)}
+/* markdown */
+.msg p{margin:0 0 7px}.msg p:last-child{margin-bottom:0}
+.msg h1,.msg h2,.msg h3,.msg h4{margin:9px 0 5px;line-height:1.3}
+.msg h1{font-size:14px}.msg h2{font-size:13px}.msg h3{font-size:12px}.msg h4{font-size:11.5px}
+.msg ul,.msg ol{margin:4px 0;padding-left:18px}.msg li{margin:1px 0}
+.msg blockquote{margin:6px 0;padding:2px 9px;border-left:2px solid var(--line2);color:var(--dim)}
+.msg code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10.5px;
+background:#10131b;border:1px solid var(--line);border-radius:4px;padding:0 3px}
+.msg .codeblock{margin:7px 0;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:#0d1017}
+.msg .codehead{display:flex;justify-content:space-between;align-items:center;gap:8px;
+padding:3px 8px;background:#151923;color:var(--dim);font-size:9.5px;text-transform:uppercase;letter-spacing:.07em}
+.msg .codehead .copybtn{background:transparent;border:0;color:var(--dim);font:inherit;font-size:9.5px;
+text-transform:none;letter-spacing:0;cursor:pointer;padding:1px 4px;border-radius:4px}
+.msg .codehead .copybtn:hover{background:#20242f;color:var(--ink)}
+.msg pre{margin:0;padding:8px 9px;overflow:auto;max-height:340px}
+.msg pre code{background:none;border:0;padding:0;font-size:10.5px;line-height:1.5;white-space:pre}
+.msg a{color:var(--run);text-decoration:none}.msg a:hover{text-decoration:underline}
+.msg img{max-width:100%;border-radius:6px;margin:5px 0}
+.msg hr{border:0;border-top:1px solid var(--line);margin:8px 0}
+.msg table{border-collapse:collapse;margin:6px 0;font-size:10.5px;display:block;overflow:auto;max-width:100%}
+.msg th,.msg td{border:1px solid var(--line);padding:3px 6px;text-align:left}
+.msg th{background:#1b202b}.msg del{color:var(--dim)}
 .empty{color:var(--dim);font-size:11.5px;text-align:center;padding:18px 8px}
 .field{display:flex;flex-direction:column;gap:6px}
 .field label{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em}
@@ -188,6 +210,7 @@ body.mode-panel .mini{left:0;right:0;top:0;bottom:auto;width:auto}
 <div class="tip" id="tip"></div>
 <div class="ctx" id="ctx"></div>
 
+<script src="/markdown.js"></script>
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -338,26 +361,47 @@ function renderDetail(){
   $("#dabort").style.display = s&&s.state==="running" ? "" : "none";
   $("#dmeta").textContent = s ? [s.model?.id, s.agent].filter(Boolean).join(" · ") : "";
   const body=$("#dbody");
+  if(view!=="chat"){ msgSession=""; msgKey=""; }
   if(view==="new"){ body.innerHTML=newChatHtml(); return; }
   if(view==="pets"){ body.innerHTML=petsHtml(); return; }
   if(view==="settings"){ body.innerHTML=settingsHtml(); return; }
-  if(!s){ body.innerHTML=`<div class="empty">pick a session, or press + for a new chat</div>`; return; }
-  body.innerHTML=`<div class="empty">loading…</div>`;
-  loadMessages(s);
+  if(!s){ msgSession=""; body.innerHTML=`<div class="empty">pick a session, or press + for a new chat</div>`; return; }
+  // Only show the placeholder when the session actually changed. Re-rendering the
+  // same chat must not replace it with "loading…" and then early-return.
+  const sk=sessionKey(s);
+  if(msgSession!==sk){ msgSession=sk; msgKey=""; body.innerHTML=`<div class="empty">loading…</div>`; }
+  scheduleMessages(s);
 }
-let msgKey="";
+let msgKey="", msgSession="", msgSeq=0, msgTimer=null;
+const sessionKey=(s)=>`${s.server}|${s.id}`;
+function scheduleMessages(s){
+  if(!s) return;
+  clearTimeout(msgTimer);
+  msgTimer=setTimeout(()=>loadMessages(s),70);
+}
 async function loadMessages(s){
+  if(!s) return;
+  const sk=sessionKey(s);
+  const seq=++msgSeq;
   try{
     const msgs=await (await fetch(`/api/messages?server=${encodeURIComponent(s.server)}&sessionId=${encodeURIComponent(s.id)}&limit=30`)).json();
+    if(seq!==msgSeq||msgSession!==sk) return; // a newer session/load won
     const rows=(msgs||[]).map(m=>({m,t:(m.parts||[]).map(p=>p.text).join("\n").trim()})).filter(x=>x.t);
     const key=JSON.stringify(rows.map(r=>r.t));
-    const body=$("#dbody");
-    if(key===msgKey) return;
+    if(key===msgKey) return; // already on screen
     msgKey=key;
-    body.innerHTML=rows.map(({m,t})=>`<div class="msg ${m.role==="user"?"user":"assistant"}">${esc(t)}</div>`).join("")
+    const body=$("#dbody");
+    const atBottom=body.scrollHeight-body.scrollTop-body.clientHeight<40;
+    body.innerHTML=rows.map(({m,t})=>
+      `<div class="msg ${m.role==="user"?"user":"assistant"}">${CPMarkdown.toHtml(t)}</div>`).join("")
       ||`<div class="empty">no messages yet</div>`;
-    body.scrollTop=body.scrollHeight;
-  }catch(e){ $("#dbody").innerHTML=`<div class="empty">${esc(e)}</div>`; }
+    if(atBottom) body.scrollTop=body.scrollHeight;
+  }catch(e){
+    if(seq===msgSeq&&msgSession===sk){
+      msgKey=""; // let the next poll retry and repaint after a transient failure
+      $("#dbody").innerHTML=`<div class="empty">${esc(e)}</div>`;
+    }
+  }
 }
 function newChatHtml(){
   const opts=workspaces.slice(0,8).map(w=>`<option value="${esc(w.directory)}">${esc(w.dirName)} — ${esc(w.directory)}</option>`).join("");
@@ -755,6 +799,17 @@ window.addEventListener("keydown",e=>{
   }
 });
 
+/* ---------------- copy buttons in code blocks ---------------- */
+document.addEventListener("click",async e=>{
+  const b=e.target.closest(".copybtn"); if(!b) return;
+  const code=b.closest(".codeblock")?.querySelector("pre code"); if(!code) return;
+  try{
+    await navigator.clipboard.writeText(code.textContent);
+    b.textContent="copied";
+    setTimeout(()=>{ b.textContent="copy"; },900);
+  }catch{}
+});
+
 /* ---------------- tooltip: hover in the bubble window, draw in the pet window ---------------- */
 const tip=$("#tip");
 function tipHtml(s){
@@ -804,8 +859,8 @@ async function loadWorkspaces(){
 function connect(){
   const es=new EventSource("/api/events");
   es.addEventListener("state",ev=>{
-    state=JSON.parse(ev.data); render();
-    if(IS_PANEL&&expanded&&view==="chat"&&currentSession()) loadMessages(currentSession());
+    state=JSON.parse(ev.data);
+    render(); // renderDetail schedules the chat refresh (and keeps it on screen)
   });
   es.onerror=()=>{ es.close(); setTimeout(connect,1500); };
 }
