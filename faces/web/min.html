@@ -761,7 +761,7 @@ async function fetchMessagePage(s, opts = {}){
     const data=await rr.json().catch(()=>null);
     if(!rr.ok) throw new Error(data?.error||`messages ${rr.status}`);
     if(!Array.isArray(data)) throw new Error("unexpected messages response");
-    return {messages:data,cursor:null};
+    return {messages:data,cursor:null,hasMore:false};
   }
   const data=await r.json().catch(()=>null);
   if(!r.ok) throw new Error(data?.error||`messages ${r.status}`);
@@ -808,7 +808,7 @@ async function loadMessages(s){
     if(seq!==msgSeq||msgSession!==sk) return; // a newer session/load won
     if(!msgStore||msgStore.key!==sk) msgStore=emptyMsgStore(sk);
     msgStore.tail=page.messages;
-    if(!msgStore.older.length) msgStore.cursor=page.cursor?.next??null;
+    if(!msgStore.older.length) msgStore.cursor=page.hasMore?(page.cursor?.next??null):null;
     if(msgStore.cursor&&!msgStore.firstLoaded){
       msgStore.firstLoaded=true;
       try{
@@ -845,7 +845,7 @@ async function loadEarlier(){
       ids.add(m.id); older.push(m);
     }
     msgStore.older=older;
-    msgStore.cursor=page.messages.length?page.cursor?.next??null:null;
+    msgStore.cursor=page.hasMore?(page.cursor?.next??null):null;
   }catch(e){
     if(msgStore===store) $("#dbody").insertAdjacentHTML("afterbegin",`<div class="empty">${esc(e.message||e)}</div>`);
   }finally{

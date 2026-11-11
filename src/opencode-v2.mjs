@@ -139,15 +139,25 @@ export class OpenCodeV2Client {
   // Fetch one page of messages. v2 pages with an opaque cursor; pages are
   // returned from oldest to newest so the face can prepend older pages without
   // reversing everything again.
-  async messagePage(id, { limit = 20, order = "desc", type = null, cursor = null, compact = false } = {}) {
-    const qs = new URLSearchParams({ limit: String(limit) });
+  async messagePage(id, { limit = 20, order = "desc", type = null, cursor = null, compact = false, lookahead = false } = {}) {
+    // Ask for one extra message so the caller can tell whether another page
+    // actually exists. v2 returns a cursor even on the last page, so cursor
+    // presence alone would show a bogus "earlier messages" divider.
+    const requestLimit = lookahead ? limit + 1 : limit;
+    const qs = new URLSearchParams({ limit: String(requestLimit) });
     if (type) qs.set("type", type);
     if (cursor) qs.set("cursor", cursor);
     else qs.set("order", order === "asc" ? "asc" : "desc");
     const out = await this.#req(`/api/session/${enc(id)}/message?${qs.toString()}`);
-    const rows = this.#normalizeRows(out?.data ?? [], { compact });
+    const raw = out?.data ?? [];
+    const rows = this.#normalizeRows(raw, { compact });
     rows.sort((a, b) => (a.info.time?.created ?? 0) - (b.info.time?.created ?? 0));
-    return { messages: rows, cursor: out?.cursor ?? null };
+    const hasMore = lookahead ? raw.length > limit : Boolean(out?.cursor);
+    return {
+      messages: rows,
+      cursor: hasMore ? out?.cursor ?? null : null,
+      hasMore,
+    };
   }
 
   async messages(id, limit = 20) {

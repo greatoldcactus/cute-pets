@@ -130,8 +130,10 @@ trace preview and clears it when the session becomes idle.
   `{role, parts, tokens, time, error}`; parts are `text`, `reasoning`, `tool`
   (`name/status/input/output`) or `file`, so faces can collapse the process trace
 - `GET /api/message-page?server&sessionId&limit&order&type&cursor&compact`
-  — the same normalized messages plus the v2 `cursor` (`{previous,next}`). Cursor pages
-  are used for “Load earlier”; `type=user&order=asc&limit=1` fetches the opening prompt.
+  — the same normalized messages plus the v2 `cursor` (`{previous,next}`) and `hasMore`.
+  A lookahead row is requested because v2 returns a cursor even on the last page;
+  `hasMore` is what decides whether the face shows “Load earlier”. Cursor pages are used
+  for “Load earlier”; `type=user&order=asc&limit=1` fetches the opening prompt.
 - `POST /api/announce` — plugin discovery `{serverUrl, directory}`
 - `GET /` — web face
 

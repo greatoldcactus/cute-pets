@@ -809,12 +809,16 @@ class Hub {
     const entry = url && this.clients.get(url);
     if (!entry || !sessionId) throw new Error("server and sessionId required");
     if (typeof entry.client.messagePage === "function") {
-      const page = await entry.client.messagePage(sessionId, { limit, order, type, cursor, compact });
-      return { messages: (page.messages ?? []).map(faceMessage), cursor: page.cursor ?? null };
+      const page = await entry.client.messagePage(sessionId, { limit, order, type, cursor, compact, lookahead: true });
+      return {
+        messages: (page.messages ?? []).map(faceMessage),
+        cursor: page.cursor ?? null,
+        hasMore: Boolean(page.hasMore),
+      };
     }
     // v1 has no cursor or type filter; return the newest page and no pagination.
     const raw = await entry.client.messages(sessionId, limit);
-    return { messages: (raw ?? []).map(faceMessage), cursor: null };
+    return { messages: (raw ?? []).map(faceMessage), cursor: null, hasMore: false };
   }
 
   async close() {
