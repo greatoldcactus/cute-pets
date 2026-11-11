@@ -104,6 +104,13 @@ export function startServer({ port, host, store, api }) {
 
       if (route === "GET /api/workspaces") return json(res, 200, { workspaces: api.workspaces() });
 
+      if (route === "GET /api/defaults") return json(res, 200, api.defaults());
+
+      if (route === "POST /api/checkdir") {
+        const body = await readBody(req);
+        return json(res, 200, api.checkdir({ directory: body.directory, server: body.server ?? null }));
+      }
+
       if (route === "POST /api/workspace") {
         const body = await readBody(req);
         const ws = await api.ensureWorkspace(body.directory);
@@ -204,6 +211,8 @@ export function startServer({ port, host, store, api }) {
           text: body.text,
           command: body.command ?? null,
           directory: body.directory ?? null,
+          model: body.model ?? null,
+          agent: body.agent ?? null,
         });
         return json(res, 200, out);
       }

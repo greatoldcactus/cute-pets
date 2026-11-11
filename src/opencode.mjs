@@ -31,6 +31,7 @@ export class OpenCodeClient {
 
   health() { return this.get("/global/health"); }
   listSessions() { return this.get("/session"); }
+  getSession(id) { return this.get(`/session/${enc(id)}`); }
   statuses() { return this.get("/session/status"); }
   permissions() { return this.get("/permission"); }
   async messages(id, limit = 20) {
