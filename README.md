@@ -55,11 +55,11 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
 3. **`+`** opens a blank chat in the last used directory (or the server's default).
    Type `/cd /path` to change it, `/model` to pick a model, then send the first message.
 4. **`/` in the composer** lists commands — agent ones (`/init`, `/review`) and pet ones
-   (`/cd`, `/fork`, `/model`, `/agent`, `/compact`, `/undo`, `/redo`, `/share`, `/abort`,
-   `/pets`). Tab completes the highlighted command (or directory) into the composer so
-   you can keep typing; Enter runs the selection. After `/cd` the directory suggestions
-   stay open and filter as you type (they are the current/last directory and every
-   session's directory; type any other absolute path and press Enter).
+   (`/cd`, `/fork`, `/model`, `/agent`, `/plan`, `/build`, `/compact`, `/undo`, `/redo`,
+   `/share`, `/abort`, `/pets`). Tab completes the highlighted command (or directory) into
+   the composer so you can keep typing; Enter runs the selection. After `/cd` the directory
+   suggestions stay open and filter as you type (they are the current/last directory and
+   every session's directory; type any other absolute path and press Enter).
 5. **Right-click a session or bubble → Hide from pet** to clear finished work out of the
    way. Nothing is deleted; Settings has an *unhide* list.
 
@@ -75,9 +75,22 @@ share one database.
 latest message through the server's own fork endpoint. The child is selected, keeps the
 parent's title with `(fork #N)`, and appears immediately instead of as `(untitled)`.
 
-**States** — `running`, `waiting` (an approval is pending), `error`, `idle`, rolled up per
-pet with the urgent one winning. Bubbles float above the sprite for the sessions that need
-attention; hovering one shows its title, directory, state and the tail of the last message.
+**States** — `running`, `waiting` (an approval or an agent question is pending), `error`,
+`idle`, rolled up per pet with the urgent one winning. Bubbles float above the sprite for
+the sessions that need attention; hovering one shows its title, directory, state and the
+tail of the last message.
+
+**Plan mode** — `/plan` switches the selected session (or the draft) to OpenCode's
+read-only `plan` agent. The pet turns violet, uses the spritesheet's review row (row 8)
+with a violet aura, and the session/bubble gets a ✦ marker. When a plan finishes it keeps
+a violet **✦ plan ready** bubble instead of the normal ✓. `/build` switches back. A pack
+that has no review pose simply keeps its idle frame; the violet aura still marks the mode.
+
+**Questions (v2 forms)** — when the agent asks via OpenCode 2's form API, the session
+becomes `waiting` and a compact form card appears above the composer. It supports text,
+number/integer, boolean, multiselect and option strings, conditional fields (`when`),
+required fields and external-link acknowledgements. Answers are posted back to the
+session through the brain, the form disappears and the session resumes.
 
 **Finished work stays visible.** When a session ends while the pet is running it keeps a
 dashed bubble with a ✓ (up to four, newest first), so you can see what just completed and
@@ -163,7 +176,16 @@ A pack is a directory with `pet.json` and a spritesheet:
 }
 ```
 
-Cells are 192×208, 8 columns; rows map to the pet's animations. Packs live in
+Cells are 192×208, 8 columns; rows map to the pet's animations. Codex V2 packs use the
+standard layout (`0 idle`, `2 running-left`, `5 failed`, `6 waiting`, `8 review`). A pack
+whose sheet differs can declare its own map in `pet.json`:
+
+```json
+"rows": { "idle": 0, "running": 2, "waiting": 6, "error": 9, "plan": 8 }
+```
+
+The built-in chibi-knight does this because it repurposes row 9 as its error pose and has
+no separate review pose. Without `rows`, the standard defaults are used. Packs live in
 `~/.cute-pets/pets/<id>/`, and the active one is `activePet` in the config.
 
 ---
@@ -252,7 +274,7 @@ Facing is a config value, never inferred from screen position:
 Everything a face needs, all JSON:
 
 ```
-GET  /api/state            {pet, sessions[], permissions[], servers[], hidden[]}
+GET  /api/state            {pet, sessions[], permissions[], forms[], servers[], hidden[]}
 GET  /api/events           SSE stream of the same snapshot
 GET  /api/health           {ok, uptime}
 GET  /api/pet  /api/pets   active pet + installed packs
@@ -265,6 +287,7 @@ POST /api/checkdir         {directory, server?}  validate a path (v2; WSL-aware)
 POST /api/prompt           {text, sessionId?|newSession, directory?, server?, model?, agent?}
 GET  /api/messages         ?server=&sessionId=&limit=
 POST /api/permission       {id, reply: once|always|reject}
+POST /api/form             {server, sessionId, formId, answer}   answer a v2 agent question
 POST /api/abort            {server, sessionId}
 POST /api/session/hide     {sessionId, hidden:true|false}
 POST /api/session/action   {sessionId, action: move|fork|compact|undo|redo|share|model|agent, …}

@@ -71,26 +71,30 @@ Two traps found the hard way:
 
 ## 4. State model
 
-Per session: `running` (busy), `waiting` (approval or question pending), `error`
-(retry / session.error), `idle`. Priority for the pet and for list order:
-`waiting > error > running > idle`.
+Per session: `running` (busy), `waiting` (approval, agent form/question, or plan answer
+pending), `error` (retry / session.error), `idle`. Priority for the pet and for list
+order: `waiting > error > running > idle`.
 
 | Input | Effect |
 | --- | --- |
 | `session.status {status:{type:"busy"}}` | running |
-| `session.status {type:"idle"}` / `session.idle` | idle (unless a permission is pending → waiting) |
+| `session.status {type:"idle"}` / `session.idle` | idle (unless a permission or form is pending → waiting) |
 | `session.status {type:"retry"}` | error, detail from `action.label` |
 | `session.error` | error |
 | `permission.asked` / `permission.replied` | refetch `GET /permission`, recompute waiting |
+| `form.created` (v2) | add the pending form, recompute waiting |
+| `form.replied` / `form.cancelled` (v2) | drop the form, recompute waiting |
 | `message.part.updated` (text) | `lastText` tail |
 | `message.part.delta` | append to `lastText` |
 
 Pet rollup: `waiting` if any session waits, else `error`, else `running`, else `idle`;
-label like "2 need you" / "1 failed" / "3 working" / "all done".
+label like "2 need you" / "1 failed" / "3 working" / "all done". If the driving session
+uses the `plan` agent and is not idle, the snapshot's `pet.plan` is true and the kind is
+`planning`.
 
 ## 5. Face API (stable contract)
 
-- `GET /api/state` — snapshot `{generatedAt, pet, servers[], sessions[], permissions[]}`
+- `GET /api/state` — snapshot `{generatedAt, pet, servers[], sessions[], permissions[], forms[]}`
 - `GET /api/events` — SSE, `event: state` with the same snapshot on every change (~120 ms debounce)
 - `POST /api/prompt` — `{text, sessionId?|server?, newSession?, title?, directory?, model?, agent?}`
   → `{server, sessionId, session}`; v2 creates the session with a `location`
@@ -99,6 +103,8 @@ label like "2 need you" / "1 failed" / "3 working" / "all done".
   validates on the brain host or its WSL UNC mount
 - `POST /api/abort` — `{server, sessionId}`
 - `POST /api/permission` — `{id, reply}`
+- `POST /api/form` — `{server, sessionId, formId, answer}`; answers a v2 agent question
+  and returns `{ok:true}`
 - `POST /api/session/action` — `{sessionId, action, value}`; includes `move` (v2),
   `fork`, `model`, `agent`
 - `GET /api/messages?server&sessionId&limit` — normalized
@@ -107,7 +113,7 @@ label like "2 need you" / "1 failed" / "3 working" / "all done".
 - `POST /api/announce` — plugin discovery `{serverUrl, directory}`
 - `GET /` — web face
 
-Session object: `{server,id,title,slug,directory,dirName,agent,model,state,detail,tokens,cost,lastText,updatedAt,pending[]}`.
+Session object: `{server,id,title,slug,directory,dirName,agent,model,state,detail,tokens,cost,lastText,updatedAt,pending[],forms[]}`.
 
 ## 6. Pet rendering
 
@@ -119,8 +125,16 @@ base frames 192×208, OpenPets-style activity strips (`activities/<id>.webp`, 4�
 | --- | --- |
 | idle | idle loop |
 | running | working loop (thinking/editing variants from tool events later) |
-| waiting | attention pose + badge, speech bubble with the permission name |
+| waiting | attention pose + badge, speech bubble with the permission/form name |
 | error | error pose, stays until acknowledged |
+| plan | review pose (row 8) with a violet aura and ✦ marker |
+
+Codex V2 sheets use `0 idle, 1 running-right, 2 running-left, 3 waving, 4 jumping,
+5 failed, 6 waiting, 7 running, 8 review, 9–10 look directions`. The face uses
+`{idle:0, running:2, waiting:6, error:5, plan:8}` by default; a pack can override any
+entry with `"rows"` in `pet.json` (the built-in chibi-knight declares `error:9` because
+its sheet is custom and has no review row). Plan mode keeps the waiting/error pose when
+it needs attention, but always keeps the violet colour/aura.
 
 ## 7. Cross-platform
 
@@ -191,6 +205,14 @@ persisting later; it is desktop-owned state, not a session concern.
   the new session to pick up its `(fork #N)` title). Model/agent switch
   (`/api/session/{id}/model`, `/agent`), session move (`/api/session/{id}/move`) and
   creating at a `location` are implemented for v2. Compact/share/revert are not.
+- **v2 forms** are agent questions that block a session: `GET /api/form?location[directory]=…`
+  lists pending forms for a location, `POST /api/session/{id}/form/{formID}/reply`
+  `{answer}` answers one, and `DELETE …/form/{formID}?message=…` cancels. Events are
+  `form.created` (`data.form`), `form.replied` and `form.cancelled`. Fields are
+  `string` (optionally with `options`/`custom`), `number`, `integer`, `boolean`,
+  `multiselect` and `external`; the answer is `{key: value}` and an external field must be
+  acknowledged with `true`. The brain fetches forms per session directory, turns a
+  pending form into `waiting`, and exposes the answer route as `POST /api/form`.
 - **Directories are server-side.** v2 servers host sessions at arbitrary locations on
   one server; v1 servers are bound to one cwd and need a spawned server per directory.
   `/cd` validates the path on the brain host (or maps a WSL POSIX path through

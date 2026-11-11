@@ -73,6 +73,7 @@ export function startServer({ port, host, store, api }) {
           description: pet.description,
           builtin: !!pet.builtin,
           url: `/pets/${pet.id}/${pet.spritesheetPath}`,
+          rows: pet.rows ?? null,
         });
       }
 
@@ -242,6 +243,17 @@ export function startServer({ port, host, store, api }) {
       if (route === "POST /api/permission") {
         const body = await readBody(req);
         const out = await api.replyPermission({ id: body.id, reply: body.reply });
+        return json(res, 200, out);
+      }
+
+      if (route === "POST /api/form") {
+        const body = await readBody(req);
+        const out = await api.replyForm({
+          server: body.server ?? null,
+          sessionId: body.sessionId,
+          formId: body.formId,
+          answer: body.answer ?? {},
+        });
         return json(res, 200, out);
       }
 
