@@ -118,6 +118,19 @@ export class OpenCodeV2Client {
     }));
   }
 
+  getSession(id) {
+    return this.#req(`/api/session/${enc(id)}`).then((out) => OpenCodeV2Client.mapSession(out?.data));
+  }
+  // A fork copies history up to `before` (null = the full history). The response
+  // carries the new session, including the "… (fork #N)" title.
+  forkSession(id, before = null) {
+    return this.#req(`/api/session/${enc(id)}/fork`, { method: "POST", body: JSON.stringify({ before }) })
+      .then((out) => OpenCodeV2Client.mapSession(out?.data));
+  }
+  setTitle(id, title) {
+    return this.#req(`/api/session/${enc(id)}`, { method: "PATCH", body: JSON.stringify({ title }) });
+  }
+
   async createSession(body = {}) {
     const payload = {};
     if (body.title) payload.title = body.title;
@@ -219,6 +232,18 @@ export class OpenCodeV2Client {
       switch (wrapper.type) {
         case "session.created":
           return onEvent({ type: "session.created", properties: { info: OpenCodeV2Client.mapSession(d) } });
+        // v2 announces a fork with only its id and parent, not its info. Fetch the
+        // session so its title ("… (fork #N)") reaches the pet immediately instead
+        // of waiting for a full sync (the store used to show it as "(untitled)").
+        case "session.forked": {
+          const id = d.sessionID;
+          if (id) {
+            void this.getSession(id)
+              .then((info) => { if (info) onEvent({ type: "session.created", properties: { info } }); })
+              .catch(() => {});
+          }
+          return;
+        }
         case "session.renamed":
           return onEvent({ type: "session.updated", properties: { info: { id: sid, title: d.title } } });
         case "session.usage.updated":

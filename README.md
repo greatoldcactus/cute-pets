@@ -54,7 +54,7 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
    sprite horizontally.
 3. **`+`** opens a compact popover: type a request, pick a folder, start a chat.
 4. **`/` in the composer** lists commands — agent ones (`/init`, `/review`) and pet ones
-   (`/model`, `/agent`, `/compact`, `/undo`, `/redo`, `/share`, `/abort`, `/pets`).
+   (`/fork`, `/model`, `/agent`, `/compact`, `/undo`, `/redo`, `/share`, `/abort`, `/pets`).
 5. **Right-click a session or bubble → Hide from pet** to clear finished work out of the
    way. Nothing is deleted; Settings has an *unhide* list.
 
@@ -65,6 +65,10 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
 **Sessions** — every session with its real title, project directory, agent, model and
 token/cost totals, deduplicated across the several `opencode serve` processes that can
 share one database.
+
+**Forking** — `/fork` (or right-click a session → Fork) forks the selected session at its
+latest message through the server's own fork endpoint. The child is selected, keeps the
+parent's title with `(fork #N)`, and appears immediately instead of as `(untitled)`.
 
 **States** — `running`, `waiting` (an approval is pending), `error`, `idle`, rolled up per
 pet with the urgent one winning. Bubbles float above the sprite for the sessions that need
@@ -194,8 +198,10 @@ on a v2 server; if you send one, the run sits in `running` while the server retr
 v2 differences the client already absorbs: prompts go out with `delivery: "queue"` (the
 default `steer` is dropped when no turn is running), messages are newest-first with
 `content[]` instead of `parts[]` and user text at `m.text`, permission replies use
-`{action, resources}`, and `/model`, `/agent`, `/compact`, `/share`, `/undo`, `/redo` are
-**not wired for v2**.
+`{action, resources}`, `/fork` is wired (`POST /api/session/{id}/fork`; the
+`session.forked` event is translated into a session fetch so the child's
+"… (fork #N)" title shows at once), and `/model`, `/agent`, `/compact`, `/share`,
+`/undo`, `/redo` are **not wired for v2**.
 
 ---
 
@@ -239,7 +245,7 @@ GET  /api/messages         ?server=&sessionId=&limit=
 POST /api/permission       {id, reply: once|always|reject}
 POST /api/abort            {server, sessionId}
 POST /api/session/hide     {sessionId, hidden:true|false}
-POST /api/session/action   {sessionId, action: compact|undo|redo|share|model|agent, …}
+POST /api/session/action   {sessionId, action: fork|compact|undo|redo|share|model|agent, …}
 POST /api/attach  /api/detach  /api/announce
 POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI uses it
 ```
@@ -248,7 +254,8 @@ POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI 
 
 ## Limitations
 
-- OpenCode 2: model switch, agent switch, compact, share, undo/redo are v1-only.
+- OpenCode 2: model switch, agent switch, compact, share, undo/redo are v1-only;
+  fork works on both.
 - Permission replies on v2 use `{action, resources}`; that path has not been exercised
   against a live request.
 - The pet, bubbles and panel are separate windows. The pet window is fixed and never

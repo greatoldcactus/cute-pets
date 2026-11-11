@@ -461,6 +461,22 @@ class Hub {
       case "redo":
         await client.unrevert(sessionId);
         return { ok: true };
+      case "fork": {
+        const out = await client.forkSession(sessionId);
+        const info = out?.data ?? out;
+        if (!info?.id) throw new Error("fork returned no session");
+        // v2 titles forks itself ("… (fork #N)"); if a server does not, keep the
+        // pet readable and avoid "(untitled)" for the child session.
+        let title = info.title || "";
+        if (!title) {
+          title = `${rec?.title || "session"} (fork)`;
+          try { await client.setTitle(info.id, title); } catch {}
+          info.title = title;
+        }
+        this.store.upsertSession(url, info);
+        const session = this.store.snapshot().sessions.find((s) => s.id === info.id) ?? null;
+        return { ok: true, sessionId: info.id, title, session };
+      }
       default:
         throw new Error(`unknown action: ${action}`);
     }
@@ -612,6 +628,11 @@ for (const entry of readConfig().servers ?? []) {
 }
 await hub.discover();
 setInterval(() => { void hub.discover(); }, 10_000);
+// Titles (forks, generated names) and metadata can change without an event we
+// translate; a cheap refresh keeps the pet from showing stale "(untitled)" rows.
+setInterval(() => {
+  for (const entry of hub.list()) void hub.sync(entry.client.baseUrl).catch(() => {});
+}, 30_000);
 log("scanning for opencode servers every 10s");
 
 process.on("SIGINT", async () => {
