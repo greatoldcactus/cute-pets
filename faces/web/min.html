@@ -109,7 +109,10 @@ cursor:pointer;box-shadow:0 6px 16px rgba(0,0,0,.45)}
 .bub span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* tooltip + context menu */
 .tip{position:fixed;max-width:300px;background:#12151c;border:1px solid var(--line2);border-radius:9px;
-padding:7px 9px;font-size:11px;color:#c8cde0;box-shadow:0 12px 26px rgba(0,0,0,.6);display:none;z-index:50}
+padding:7px 9px;font-size:11px;color:#c8cde0;box-shadow:0 12px 26px rgba(0,0,0,.6);display:none;z-index:50;
+/* never become the hover target: an overlapping tip used to steal the bubble,
+   which hid the tip, which brought the bubble back — a flicker plus dead clicks */
+pointer-events:none}
 .tip.on{display:block}
 .ctx{position:fixed;min-width:186px;background:#161922;border:1px solid var(--line2);border-radius:10px;
 padding:5px;box-shadow:0 16px 34px rgba(0,0,0,.65);display:none;z-index:60}
@@ -119,6 +122,14 @@ font:inherit;font-size:12px;padding:6px 9px;border-radius:7px;cursor:pointer}
 .ctx button:hover{background:#222736}
 .ctx .sep{height:1px;background:var(--line);margin:4px 6px}
 .ctx .k{float:right;color:var(--dim);font-size:10.5px}
+/* ---- two windows: pet surface and panel surface ---- */
+body.mode-pet .panel, body.mode-pet .mini{display:none!important}
+body.mode-panel .petzone, body.mode-panel .bubbles, body.mode-panel .tip{display:none!important}
+/* the panel window is exactly the panel: fill it, no 560x800 shell around it */
+body.mode-panel .panel{position:absolute;left:0;right:0;top:0;bottom:0;height:auto;display:flex;border-radius:12px}
+body.mode-panel.mini-open .panel{display:none}
+/* the mini window is sized to exactly this form, so it starts at the top */
+body.mode-panel .mini{left:0;right:0;top:0;bottom:auto;width:auto}
 </style></head>
 <body class="minimized">
 <div class="wrap">
@@ -173,11 +184,17 @@ font:inherit;font-size:12px;padding:6px 9px;border-radius:7px;cursor:pointer}
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const api=window.cp||{setExpanded(){},setIgnore(){},setFacing(){},onFacing(){},pickFolder:async()=>({ok:false})};
+const api=window.cp||{setIgnore(){},setWindowRect(){},setFacing(){},onFacing(){},onPanel(){},
+  onPanelCommand(){},panel(){},panelSize(){},petMenu(){},bubbleMenu(){},pickFolder:async()=>({ok:false})};
+// One page, two windows: #pet keeps the sprite + bubbles, #panel keeps the UI.
+const SURFACE=(location.hash||"#pet").slice(1)==="panel"?"panel":"pet";
+const IS_PET=SURFACE==="pet";
+document.body.classList.add(IS_PET?"mode-pet":"mode-panel");
 const B="";
 let state={pet:{state:"idle"},sessions:[],permissions:[],servers:[]};
 let finishedIds=[], prevStates=new Map(), firstRender=false;   // sessions that ended while we were watching
-let expanded=false, selected=null, view="chat", filter="all", commands=[], newDir=null, workspaces=[];
+let expanded=!IS_PET, selected=null, view="chat", filter="all", commands=[], newDir=null, workspaces=[];
+if(!IS_PET) document.body.classList.add("expanded"); // the panel window only exists while open
 
 /* ---------------- sprite ---------------- */
 const FW=192,FH=208,FRAMES=8;
@@ -206,8 +223,8 @@ function draw(t){
   }
   requestAnimationFrame(draw);
 }
-img.onload=()=>{ measure(); };
-requestAnimationFrame(draw);
+img.onload=()=>{ if(IS_PET) measure(); };
+if(IS_PET) requestAnimationFrame(draw);
 async function loadPet(){
   try{
     const p=await (await fetch("/api/pet")).json();
@@ -228,99 +245,21 @@ async function post(path, body){
   if(!r.ok) throw new Error(j.error||r.status);
   return j;
 }
-const PANEL_H=574;
-let showPanelTimer=null;
-let lastLayout=0;   // setExpanded moves the window; a click that lands right after is noise
+let lastLayout=0;   // a click that lands right after the panel toggles is noise
 function petRect(){ return cv.getBoundingClientRect(); }
 
-// Keep the pet AND whatever panel is open inside the work area. Moves the window by
-// the smallest amount that fixes it; the sprite is never pushed off-screen.
-// The window may still be moving from the flip compensation when the panel is first
-// laid out, so measure a few times instead of once.
-function scheduleFit(){
-  requestAnimationFrame(fitOnScreen);
-  setTimeout(fitOnScreen,120);
-  setTimeout(fitOnScreen,320);
-}
-function visibleBoxes(){
-  const boxes=[petRect()];
-  const open=document.body.classList.contains("mini-open")?$("#mini"):$(".panel");
-  if(open && getComputedStyle(open).display!=="none"){
-    const r=open.getBoundingClientRect();
-    if(r.width&&r.height) boxes.push(r);
-  }
-  return boxes;
-}
-// Moves are only applied once the panel has actually been painted as hidden;
-// otherwise the compositor shows the previous frame at the new window position
-// (the "window teleported for an instant" flash).
-function applyMove(dx,dy,done){
-  dx=Math.round(dx||0); dy=Math.round(dy||0);
-  if(!dx&&!dy){ done&&done(); return; }
-  document.body.classList.add("switching");
-  requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    api.moveBy(dx,dy);
-    setTimeout(()=>{ document.body.classList.remove("switching"); done&&done(); },70);
-  }));
-}
-function fitOnScreen(){
-  const al=screen.availLeft??0, at=screen.availTop??0;
-  const aw=screen.availWidth||screen.width, ah=screen.availHeight||screen.height;
-  const boxes=visibleBoxes();
-  const L=Math.min(...boxes.map(b=>window.screenX+b.left));
-  const R=Math.max(...boxes.map(b=>window.screenX+b.right));
-  const T=Math.min(...boxes.map(b=>window.screenY+b.top));
-  const B=Math.max(...boxes.map(b=>window.screenY+b.bottom));
-  let dx=0, dy=0;
-  if(L<al) dx=al-L; else if(R>al+aw) dx=(al+aw)-R;
-  if(T<at) dy=at-T; else if(B>at+ah) dy=(at+ah)-B;
-  // the sprite wins over the panel: never trade visibility of the pet for the panel
-  const p=petRect();
-  const pT=window.screenY+p.top+dy, pB=window.screenY+p.bottom+dy;
-  if(pT<at) dy+=(at-pT);
-  if(pB>at+ah) dy-=((pB)-(at+ah));
-  if(Math.abs(dx)>=1||Math.abs(dy)>=1) applyMove(dx,dy);
-}
+// The panel is a separate window now (electron/main.cjs). On the pet surface this
+// only tracks the panel-open state the shell reports back, so bubbles can hide and
+// the window can hug the sprite. On the panel surface, closing asks the shell to
+// hide the window; opening is the shell's job.
 function setExpanded(on){
+  if(!IS_PET){ if(!on) api.panel({open:false}); return; }
   if(on===expanded) return;
   lastLayout=Date.now();
-  // The window moves by the panel height when the pet flips sides; until that move
-  // lands the freshly laid out panel would be painted at the old place for a frame.
-  // Hide it for those frames instead of letting it flash at the top.
-  document.body.classList.add("switching");
-  clearTimeout(showPanelTimer);
-  showPanelTimer=setTimeout(()=>document.body.classList.remove("switching"),80);
-  const before=petRect().top;
   expanded=on;
   document.body.classList.toggle("expanded",on);
   document.body.classList.toggle("minimized",!on);
-  // If there is no room above the pet for the panel, render it below instead and
-  // move the window down by the same amount so the pet does not appear to jump.
-  const petTopScreen=window.screenY+before;
-  const petH=petRect().height;
-  const petBottomScreen=petTopScreen+petH;
-  const at=screen.availTop??0, ah=screen.availHeight||screen.height;
-  const roomAbove=petTopScreen-at-10;
-  const roomBelow=(at+ah)-petBottomScreen-10;
-  const MINH=340;
-  let flip=false, panelH=PANEL_H;
-  if(roomAbove>=PANEL_H)      { panelH=PANEL_H; }
-  else if(roomAbove>=MINH)    { panelH=roomAbove; }                 // shrink, stay above
-  else if(roomBelow>=PANEL_H) { flip=true; panelH=PANEL_H; }        // go below
-  else if(roomBelow>=MINH)    { flip=true; panelH=roomBelow; }
-  else {                       // no comfortable room anywhere: pick the larger side
-    flip=roomBelow>roomAbove;
-    panelH=Math.max(220,Math.min(PANEL_H,Math.max(roomAbove,roomBelow)));
-  }
-  document.documentElement.style.setProperty("--panelH",Math.round(panelH)+"px");
-  document.body.classList.toggle("flip",on&&flip);
-  const after=petRect().top;
-  // keeping the sprite where it is on screen is the whole point: move only when the
-  // panel had to change sides, and do it while the panel is hidden
-  if(on) applyMove(0, Math.round(before-after), ()=>scheduleFit());
-  else   applyMove(0, Math.round(before-after));
-  api.setExpanded(on);
-  if(!on) document.body.classList.remove("mini-open");
+  syncCollapsedSize();
 }
 function showView(v){ view=v; render(); }
 const currentSession=()=>state.sessions.find(s=>s.id===selected)||null;
@@ -338,6 +277,7 @@ function renderBubbles(){
       <i></i><span>${esc(s.title)}</span></button>`),
     ...done.map(s=>`<button class="bub done" data-session="${esc(s.id)}" title="finished - right-click to hide">
       <i></i><span>&#10003; ${esc(s.title)}</span></button>`)].join("");
+  syncCollapsedSize();
 }
 function renderList(){
   const dirs=[...new Set(state.sessions.map(s=>s.dirName).filter(Boolean))].sort();
@@ -480,7 +420,10 @@ document.addEventListener("click",async e=>{
   const perm=e.target.closest("[data-perm]");
   if(perm){ try{ await post("/api/permission",{id:perm.dataset.perm,reply:perm.dataset.reply}); }catch(err){} return; }
   const row=e.target.closest("[data-session]");
-  if(row){ selected=row.dataset.session; msgKey=""; showView("chat"); setExpanded(true); return; }
+  if(row){
+    if(IS_PET){ api.panel({open:true,sessionId:row.dataset.session}); return; }
+    selected=row.dataset.session; msgKey=""; showView("chat"); return;
+  }
   const pet=e.target.closest("[data-pet]");
   if(pet){ try{ await post("/api/pets/active",{id:pet.dataset.pet}); await loadPet(); renderPetsList(); }catch(err){} return; }
   const face=e.target.closest("[data-facing]");
@@ -508,8 +451,12 @@ function openMini(){
   setExpanded(true);
   document.body.classList.add("mini-open");
   $("#miniDir").textContent=newDir||"no folder";
-  $("#miniDir").textContent=newDir||"no folder";
-  setTimeout(()=>{ scheduleFit(); $("#miniText").focus(); },60);
+  // the panel window shrinks to the popover instead of leaving empty space above it
+  requestAnimationFrame(()=>{
+    const h=$("#mini").offsetHeight;
+    if(h>0) api.panelSize({height:h});
+    $("#miniText").focus();
+  });
 }
 async function startMini(){
   const text=$("#miniText").value.trim(); if(!text) return;
@@ -519,6 +466,7 @@ async function startMini(){
     $("#miniText").value="";
     selected=r.sessionId; msgKey=""; showView("chat");
     document.body.classList.remove("mini-open");
+    api.panelSize({full:true});
   }catch(e){ alert(String(e)); }
 }
 
@@ -695,7 +643,8 @@ window.addEventListener("mousemove",e=>{ if(!drag) return;
   api.dragMove({x:e.screenX,y:e.screenY}); });
 window.addEventListener("mouseup",e=>{ if(!drag) return; const moved=drag.moved; drag=null; api.dragEnd();
   // only a real click toggles the panel; ignored when a window move re-synthesises one
-  if(moved<4 && e.isTrusted && Date.now()-lastLayout>600) setExpanded(!expanded); });
+  if(IS_PET && moved<4 && e.isTrusted && Date.now()-lastLayout>600) api.panel({open:!expanded});
+  hitTest(e.clientX,e.clientY); syncCollapsedSize(); });
 
 const ctx=$("#ctx");
 function placeMenu(el,x,y){
@@ -711,6 +660,8 @@ function placeMenu(el,x,y){
   el.style.left=Math.max(6,Math.min(px,innerWidth-w-6))+"px";
   el.style.top=py+"px";
 }
+// The pet surface uses native menus (they need no window space). The panel
+// surface keeps this DOM menu for its session rows, where there is room.
 function showMenu(items,x,y){
   ctx.innerHTML=items.map(it=>it==="sep"?`<div class="sep"></div>`
     :`<button data-act="${esc(it.act)}"${it.id?` data-sid="${esc(it.id)}"`:""}>${esc(it.label)}${it.key?`<span class="k">${esc(it.key)}</span>`:""}</button>`).join("");
@@ -718,15 +669,9 @@ function showMenu(items,x,y){
   placeMenu(ctx,x,y);
 }
 cv.addEventListener("contextmenu",e=>{
+  if(!IS_PET) return;
   e.preventDefault();
-  const items=[
-    ["New chat…","new","ctrl+n"],["Sessions","sessions",""],["Pets","pets",""],["Settings","settings",""],
-    ["sep","",""],["Hide pet","hide",""],["Quit","quit",""],
-  ];
-  ctx.innerHTML=items.map(([label,act,key])=>label==="sep"?`<div class="sep"></div>`
-    :`<button data-act="${act}">${label}${key?`<span class="k">${key}</span>`:""}</button>`).join("");
-  ctx.classList.add("on");
-  placeMenu(ctx, e.clientX, e.clientY);
+  api.petMenu();
 });
 ctx.addEventListener("click",async e=>{
   const btn=e.target.closest("[data-act]"); const act=btn?.dataset.act; if(!act) return;
@@ -749,8 +694,13 @@ ctx.addEventListener("click",async e=>{
 function hideCtx(){ ctx.classList.remove("on"); }
 document.addEventListener("contextmenu",e=>{
   const row=e.target.closest("[data-session]"); if(!row) return;
-  e.preventDefault();
   const s=state.sessions.find(x=>x.id===row.dataset.session); if(!s) return;
+  if(IS_PET){
+    e.preventDefault();
+    api.bubbleMenu({sessionId:s.id,server:s.server,state:s.state});
+    return;
+  }
+  e.preventDefault();
   showMenu([
     {label:"Open",act:"s-open",id:s.id},
     ...(s.state==="running"?[{label:"Stop",act:"s-abort",id:s.id}]:[]),
@@ -761,7 +711,11 @@ document.addEventListener("contextmenu",e=>{
 document.addEventListener("mousedown",e=>{ if(!e.target.closest("#ctx")&&!e.target.closest("#pet")) hideCtx(); });
 window.addEventListener("keydown",e=>{
   if(e.key==="Escape"){ hideCtx(); closePalette(); }
-  if(e.ctrlKey&&e.key.toLowerCase()==="n"){ e.preventDefault(); openMini(); }
+  if(e.ctrlKey&&e.key.toLowerCase()==="n"){
+    e.preventDefault();
+    if(IS_PET) api.panel({open:true,action:"new"});
+    else openMini();
+  }
 });
 
 /* ---------------- tooltip on bubbles ---------------- */
@@ -773,17 +727,82 @@ document.addEventListener("mouseover",e=>{
   tip.innerHTML=`<b>${esc(s.title)}</b><div style="color:var(--dim);margin-top:3px">${esc(s.dirName||"")} · ${esc(s.state)}</div>`
     + (txt?`<div style="margin-top:5px">${esc(txt.slice(0,160))}${txt.length>160?"…":""}</div>`:"");
   tip.classList.add("on");
-  const r=b.getBoundingClientRect();
+  const r=b.getBoundingClientRect(), h=tip.offsetHeight;
+  // prefer above the bubble; when the window hugs the bubbles there is no room,
+  // so drop below it instead of covering the bubble the pointer is on
+  let top=r.top-h-8;
+  if(top<6) top=r.bottom+8;
+  top=Math.max(6,Math.min(top, innerHeight-h-6));
   tip.style.left=Math.max(6,Math.min(r.left, innerWidth-310))+"px";
-  tip.style.top=Math.max(6,r.top-tip.offsetHeight-8)+"px";
+  tip.style.top=top+"px";
 });
 document.addEventListener("mouseout",e=>{ if(e.target.closest(".bub")) tip.classList.remove("on"); });
 
-/* ---------------- passthrough, events, boot ---------------- */
-document.addEventListener("mousemove",e=>{
-  const el=document.elementFromPoint(e.clientX,e.clientY);
-  // .mini must be here too, or the window stays click-through over the popover
-  api.setIgnore(!(el&&el.closest(".interactive, .panel, .petzone, .ctx, .tip, .palette, .mini")));
+/* ---------------- passthrough, window size, events, boot ---------------- */
+// Linux: a click-through window cannot take mouse input back (Chromium has no
+// mouse forwarding there), so instead the window shrinks to the pet + bubbles
+// while the panel is closed and grows for the panel. The sprite is anchored by
+// its right/bottom corner, so resizing never moves it on screen.
+const useResize=!!api.useResize;
+const SIZES=api.sizes||{FULL:{width:560,height:800},SMALL:{width:320,height:400}};
+function petAnchor(){
+  const p=document.querySelector(".petzone").getBoundingClientRect();
+  return {right:window.screenX+p.right, top:window.screenY+p.top, bottom:window.screenY+p.bottom};
+}
+function rectFor(anchor,size,flip){
+  return {x:Math.round(anchor.right-size.width),
+          y:Math.round(flip?anchor.top:anchor.bottom-size.height),
+          width:size.width, height:size.height};
+}
+// The collapsed window hugs the pet and whatever bubbles are above it, so there
+// is no transparent band left over to intercept clicks.
+function collapsedHeight(){
+  const z=document.querySelector(".petzone").getBoundingClientRect();
+  const b=$("#bubbles").getBoundingClientRect();
+  return Math.max(230,Math.ceil(z.height+Math.max(0,b.height)+8));
+}
+function collapsedRect(anchor){
+  return rectFor(anchor,{width:SIZES.SMALL.width,height:collapsedHeight()},false);
+}
+let lastCollapsedH=0;
+function syncCollapsedSize(force){
+  if(!IS_PET||!useResize||drag) return;
+  const h=collapsedHeight();
+  if(!force&&Math.abs(h-lastCollapsedH)<2) return;
+  lastCollapsedH=h;
+  api.setWindowRect(collapsedRect(petAnchor()));
+}
+let passthrough=null; // last state sent to the shell (non-Linux)
+function hitTest(x,y){
+  if(!IS_PET||useResize) return;
+  const el=document.elementFromPoint(x,y);
+  // bubbles live above .petzone; include them or they would pass clicks through
+  const next=!(el&&el.closest(".interactive, .panel, .petzone, .bubbles, .bub, .ctx, .tip, .palette, .mini"));
+  if(next===passthrough) return;
+  passthrough=next;
+  api.setIgnore(next);
+}
+if(IS_PET&&!useResize) document.addEventListener("mousemove",e=>{ if(!drag) hitTest(e.clientX,e.clientY); });
+
+// shell -> pet: the panel opened/closed (hide bubbles, re-hug the window)
+if(api.onPanel) api.onPanel(s=>{
+  if(!IS_PET) return;
+  lastLayout=Date.now();
+  setExpanded(!!s.open);
+});
+// shell -> panel: what to show when the panel window is opened
+if(api.onPanelCommand) api.onPanelCommand(c=>{
+  if(IS_PET) return;
+  expanded=true;
+  document.body.classList.add("expanded");
+  if(c.action==="new"){ openMini(); return; }
+  if(document.body.classList.contains("mini-open")){
+    document.body.classList.remove("mini-open");
+    api.panelSize({full:true});
+  }
+  if(c.sessionId){ selected=c.sessionId; view="chat"; msgKey=""; }
+  if(c.view) view=c.view;
+  render();
 });
 
 async function loadWorkspaces(){

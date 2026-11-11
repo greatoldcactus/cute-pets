@@ -12,14 +12,16 @@ into any of them. No tokens spent, no hooks required.
 
 ```
           opencode serve ──HTTP+SSE──▶ brain ──HTTP+SSE──▶ faces
-                 ▲                    (src/)               ├─ Electron pet window
-                 └── plugin announce ──┘                   └─ web tray / pet-only
+                 ▲                    (src/)               ├─ pet window   (sprite + bubbles)
+                 └── plugin announce ──┘                   ├─ panel window (sessions, chat)
+                                                           └─ web tray / pet-only
 ```
 
 - **brain** (`src/`, Node 22, zero runtime dependencies) — holds the OpenCode client,
   the state machine, the permission queue, and serves snapshots.
-- **faces** (`electron/`, `faces/web/`) — a frameless always-on-top sprite window and a
-  browser session tray. Both render the same `{pet, sessions, permissions}` snapshot.
+- **faces** (`electron/`, `faces/web/`) — two thin Electron windows (a sprite window and a
+  panel window) plus a browser session tray. All render the same
+  `{pet, sessions, permissions}` snapshot.
 - **plugin** (`plugin/cute-pets.ts`, optional) — tells the brain where a server lives.
 
 ---
@@ -46,7 +48,7 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
 
 ### Five things to try first
 
-1. **Click the pet** — the panel opens next to her; click again to close.
+1. **Click the pet** — the panel opens in its own window next to her; click again to close.
 2. **Drag her** anywhere, including to the very top of the screen. Double-click flips the
    sprite horizontally.
 3. **`+`** opens a compact popover: type a request, pick a folder, start a chat.
@@ -86,14 +88,20 @@ and the pet's right-click menu reach the same thing.
 red-armoured chibi knight ships in the repo and is installed by default; any `.zip` or
 folder can be imported, switched at runtime and mirrored.
 
-**Placement** — the window is a fixed 560×800 with a transparent margin. Dragging clamps the
-*sprite*, not the window, so she can be parked against the top edge.
+**Placement** — two windows: one for the sprite and bubbles, one for the panel. Dragging
+clamps the *sprite*, not the panel, so she can be parked against the top edge.
 
-Opening the panel never moves the sprite. The panel is sized to the room that actually
-exists on screen (574 px when there is space, less when there is not) and drawn below the
-sprite when there is no room above. Only a forced side change moves the window, and that
-move happens while the panel is `visibility:hidden`, so nothing flashes at the old position.
-Menus are placed to the side of the sprite and never cover her.
+The pet window hugs the sprite and the bubbles above it (`320` wide, height measured from
+the stack), so the space around her still belongs to the apps behind. Clicking her opens
+the panel in its own always-on-top window, sized to the room above the sprite (574 px when
+there is space, less when there is not) or placed below her when there is no room. Opening
+or closing the panel never resizes or moves the pet window, so the sprite cannot shift on a
+click. The new-chat popover (`+`) is a short panel window of its own; context menus are
+native menus and never cover her.
+
+On Windows/macOS the pet window is fixed at `320×400` and its unused margin is
+click-through. On Linux XWayland cannot hand mouse input back to a click-through window,
+so there the pet window hugs its content instead and stays fully clickable.
 
 **Hidden sessions** — pet-side only: the session keeps existing (and running) in OpenCode,
 it just stops appearing on the pet. Persisted in `~/.cute-pets/hidden.json`, restorable from
@@ -245,8 +253,9 @@ POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI 
 - OpenCode 2: model switch, agent switch, compact, share, undo/redo are v1-only.
 - Permission replies on v2 use `{action, resources}`; that path has not been exercised
   against a live request.
-- The window is fixed-size by design (resizing a transparent window flickers on Windows),
-  so the panel flips instead of growing.
+- The pet and panel are separate windows. The pet window resizes only when the bubble
+  stack changes; on Windows it stays fixed at `320×400` because resizing a transparent
+  window flickers there.
 - Linux/macOS: the Electron shell is portable, but only Windows has been run in anger;
   click-through and work-area clamping are the platform-specific parts.
 
@@ -256,8 +265,9 @@ POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI 
 npm run smoke        # end-to-end: attach, create a session, prompt, read the reply
 ```
 
-`npm run shell -- --dev` exposes a control server on `:4290` with `/size`, `/eval?js=…`
-and `/shot?file=…` — that is how the screenshot above was produced.
+`npm run shell -- --dev` exposes a control server on `:4290`: `/size`, `/eval?js=…` and
+`/shot?file=…` drive the pet window, `/panel-size`, `/panel-eval?js=…` and
+`/panel-shot?file=…` drive the panel window.
 
 ```
 src/main.mjs        hub: discovery, attach, dispatch, hidden persistence
@@ -266,7 +276,8 @@ src/state.mjs       session/state machine, permissions, snapshots
 src/server.mjs      face API + SSE      src/pets.mjs  pet store + built-in seeding
 src/config.mjs      ~/.cute-pets/config.json
 pets/chibi-knight/  the pack that ships with the repo
-electron/main.cjs   sprite window, drag, dialogs, bounds lock
+electron/main.cjs   pet + panel windows, placement, menus, drag
+electron/sizes.cjs  window sizes shared by the shell and the face
 faces/web/min.html  the pet window UI   faces/web/index.html  full tray
 ```
 
