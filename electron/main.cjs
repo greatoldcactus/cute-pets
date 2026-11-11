@@ -1,9 +1,11 @@
 // cute-pets desktop shell.
-// Two surfaces, two windows:
-//   pet window    min.html#pet     sprite + bubbles, hugs its content
-//   panel window  min.html#panel   sessions/chat/settings, shown on demand
-// Keeping them apart means opening the panel never resizes the pet window, so the
-// sprite cannot move on a click. Usage: npx electron electron/main.cjs [--dev]
+// Three surfaces, three windows:
+//   pet window      min.html#pet      sprite only, fixed size
+//   bubbles window  min.html#bubbles  the bubble stack, sized to its content
+//   panel window    min.html#panel    sessions/chat/settings, shown on demand
+// The sprite window never changes size, so nothing can make the pet jump when a
+// bubble appears/disappears or when the panel opens.
+// Usage: npx electron electron/main.cjs [--dev]
 const { app, BrowserWindow, ipcMain, screen, dialog, Menu } = require("electron");
 const http = require("node:http");
 const fs = require("node:fs");
@@ -11,33 +13,29 @@ const path = require("node:path");
 const os = require("node:os");
 
 const BRAIN = process.env.CP_URL || "http://127.0.0.1:4280";
-const { FULL: WIN, SMALL, MARGIN } = require("./sizes.cjs");
-const LINUX = process.platform === "linux";
+const { FULL, PET, MARGIN } = require("./sizes.cjs");
 
-// .petzone in faces/web/min.html: 260x222, pinned to the pet window's bottom-right.
-const PET_ZONE = { width: 260, height: 222 };
-const PANEL_W = WIN.width; // 560
+const PANEL_W = FULL.width; // 560
 const PANEL_MAX_H = 574;
 const PANEL_MIN_H = 340;
 const PANEL_GAP = 6;
+const BUBBLE_GAP = 2;
 
 let petWin = null;
+let bubbleWin = null;
 let panelWin = null;
 let panelOpen = false;
 let panelPending = null; // command queued until the panel page finishes loading
+let bubbleSize = { width: 0, height: 0 };
 let grab = null;
-let size = { ...SMALL }; // pet window size (hugged on Linux, fixed elsewhere)
 
-// Always size from the tracked size: getBounds() returns scaled pixels while
-// setBounds() takes DIPs, so feeding one into the other inflates the window on
-// every move (that was the drift that also made the panel miss the screen).
+// The pet window is a fixed size; move it without ever resizing it.
 function place(bounds) {
-  petWin.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: size.width, height: size.height }, false);
+  petWin.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: PET.width, height: PET.height }, false);
+  positionBubbles();
 }
 
 // ---- config -------------------------------------------------------------
-// ~/.cute-pets/config.json is shared with the brain (brain.json lives there too).
-// facing: "right" = sprite as authored, "left" = mirrored.
 const CONFIG_PATH = path.join(os.homedir(), ".cute-pets", "config.json");
 
 function readConfig() {
@@ -66,14 +64,41 @@ const cliFacing = (() => {
 const config = { ...readConfig() };
 config.facing = cliFacing || (config.facing === "left" ? "left" : "right");
 
-// ---- panel placement ----------------------------------------------------
-// Anchor the panel on the sprite's right edge and put it on whichever side of the
-// sprite has room. The panel window is sized to fit, so the sprite never moves.
+// ---- placement ----------------------------------------------------------
+function workArea(win) {
+  return screen.getDisplayMatching(win.getBounds()).workArea;
+}
+
+// The bubbles hug the sprite's top-right corner. Their window is sized by the
+// bubble face; this only positions it, so the pet window itself never changes.
+function bubblePlacement() {
+  const b = petWin.getBounds();
+  const area = workArea(petWin);
+  const w = Math.max(1, Math.round(bubbleSize.width));
+  const h = Math.max(1, Math.round(bubbleSize.height));
+  const x = Math.max(area.x, Math.min(b.x + b.width - w, area.x + area.width - w));
+  let y = b.y - h - BUBBLE_GAP;
+  if (y < area.y) y = b.y + b.height + BUBBLE_GAP; // no room above: below the pet
+  y = Math.max(area.y, Math.min(y, area.y + area.height - h));
+  return { x: Math.round(x), y: Math.round(y), width: w, height: h };
+}
+
+function positionBubbles() {
+  if (!bubbleWin || bubbleWin.isDestroyed()) return;
+  const visible = !panelOpen && bubbleSize.width > 1 && bubbleSize.height > 1;
+  if (!visible) {
+    if (bubbleWin.isVisible()) bubbleWin.hide();
+    return;
+  }
+  bubbleWin.setBounds(bubblePlacement(), false);
+  if (!bubbleWin.isVisible()) bubbleWin.showInactive();
+}
+
 function panelPlacement() {
   const b = petWin.getBounds();
-  const area = screen.getDisplayMatching(b).workArea;
+  const area = workArea(petWin);
   const right = b.x + b.width;
-  const top = b.y + b.height - PET_ZONE.height;
+  const top = b.y;
   const bottom = b.y + b.height;
   const roomAbove = top - area.y - 10;
   const roomBelow = area.y + area.height - bottom - 10;
@@ -99,9 +124,9 @@ function panelPlacement() {
 // of leaving a tall transparent strip above the form.
 function miniPlacement(height) {
   const b = petWin.getBounds();
-  const area = screen.getDisplayMatching(b).workArea;
+  const area = workArea(petWin);
   const right = b.x + b.width;
-  const top = b.y + b.height - PET_ZONE.height;
+  const top = b.y;
   const bottom = b.y + b.height;
   const h = Math.max(120, Math.min(PANEL_MAX_H, Math.round(height)));
   const x = Math.max(area.x, Math.min(right - PANEL_W, area.x + area.width - PANEL_W));
@@ -129,7 +154,11 @@ function showPanel(cmd = {}) {
     view: cmd.view ?? null,
     action: cmd.action ?? null,
   });
-  if (petWin && !petWin.isDestroyed()) petWin.webContents.send("cp:panel-state", { open: true });
+  if (petWin && !petWin.isDestroyed()) {
+    petWin.webContents.send("cp:panel-state", { open: true });
+    petWin.webContents.send("cp:tooltip", { show: false });
+  }
+  positionBubbles();
 }
 
 function hidePanel() {
@@ -137,6 +166,7 @@ function hidePanel() {
   panelOpen = false;
   if (panelWin.isVisible()) panelWin.hide();
   if (petWin && !petWin.isDestroyed()) petWin.webContents.send("cp:panel-state", { open: false });
+  positionBubbles();
 }
 
 function togglePanel() {
@@ -178,17 +208,28 @@ function bubbleMenu(info = {}) {
     { type: "separator" },
     { label: "Hide from pet", click: () => brainPost("/api/session/hide", { sessionId: info.sessionId, hidden: true }) },
   );
-  Menu.buildFromTemplate(items).popup({ window: petWin });
+  Menu.buildFromTemplate(items).popup({ window: bubbleWin || petWin });
 }
 
-// ---- app ----------------------------------------------------------------
+// ---- windows ------------------------------------------------------------
+const WEB_PREFS = {
+  preload: path.join(__dirname, "preload.cjs"),
+  contextIsolation: true,
+  nodeIntegration: false,
+};
+
+function load(w, surface) {
+  w.loadURL(`${BRAIN}/min.html#${surface}`);
+}
+
 app.whenReady().then(() => {
   const area = screen.getPrimaryDisplay().workArea;
+
   petWin = new BrowserWindow({
-    width: size.width,
-    height: size.height,
-    x: area.x + area.width - size.width - MARGIN,
-    y: area.y + area.height - size.height - MARGIN,
+    width: PET.width,
+    height: PET.height,
+    x: area.x + area.width - PET.width - MARGIN,
+    y: area.y + area.height - PET.height - MARGIN,
     transparent: true,
     frame: false,
     resizable: false,
@@ -199,27 +240,41 @@ app.whenReady().then(() => {
     backgroundColor: "#00000000",
     fullscreenable: false,
     maximizable: false,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
+    webPreferences: WEB_PREFS,
   });
-
   petWin.on("maximize", () => {
     if (petWin.isMaximized()) petWin.unmaximize();
     const b = petWin.getBounds();
     place({ x: b.x, y: b.y });
   });
   petWin.on("resize", () => {
-    if (LINUX) return; // the face hugs the pet + bubbles; keep the requested bounds
     const b = petWin.getBounds();
-    if (b.width !== SMALL.width || b.height !== SMALL.height) {
-      petWin.setBounds({ x: b.x, y: b.y, width: SMALL.width, height: SMALL.height }, false);
+    if (b.width !== PET.width || b.height !== PET.height) {
+      petWin.setBounds({ x: b.x, y: b.y, width: PET.width, height: PET.height }, false);
+      positionBubbles();
     }
   });
   petWin.setAlwaysOnTop(true, "screen-saver");
   petWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+
+  bubbleWin = new BrowserWindow({
+    width: 320,
+    height: 400,
+    show: false,
+    transparent: true,
+    frame: false,
+    resizable: false,
+    movable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    alwaysOnTop: true,
+    backgroundColor: "#00000000",
+    fullscreenable: false,
+    maximizable: false,
+    webPreferences: WEB_PREFS,
+  });
+  bubbleWin.setAlwaysOnTop(true, "screen-saver");
+  bubbleWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
   panelWin = new BrowserWindow({
     width: PANEL_W,
@@ -235,30 +290,26 @@ app.whenReady().then(() => {
     backgroundColor: "#00000000",
     fullscreenable: false,
     maximizable: false,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
+    webPreferences: WEB_PREFS,
   });
   panelWin.setAlwaysOnTop(true, "screen-saver");
   panelWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
-  petWin.loadURL(`${BRAIN}/min.html#pet`);
-  panelWin.loadURL(`${BRAIN}/min.html#panel`);
+  load(petWin, "pet");
+  load(bubbleWin, "bubbles");
+  load(panelWin, "panel");
 
-  // Linux: the pet face sends the exact window rect so the window hugs the sprite
-  // and bubbles. The panel is a separate window now, so this never fires on a click.
-  ipcMain.on("cp:window-rect", (_e, rect) => {
-    if (!LINUX || !rect) return;
-    const width = Math.round(rect.width);
-    const height = Math.round(rect.height);
-    if (!(width > 40 && height > 40)) return;
-    size = { width, height };
-    petWin.setBounds({ x: Math.round(rect.x), y: Math.round(rect.y), width, height }, false);
+  // Bubbles face -> shell: content size (and therefore window size).
+  ipcMain.on("cp:bubbles-size", (_e, s) => {
+    bubbleSize = { width: Number(s?.width) || 0, height: Number(s?.height) || 0 };
+    positionBubbles();
   });
-  ipcMain.on("cp:window-sizes", (e) => {
-    e.returnValue = { FULL: WIN, SMALL };
+  // Bubbles face -> pet face: the tooltip is drawn in the pet window (it can be
+  // pointer-transparent there without needing an extra window).
+  ipcMain.on("cp:tooltip", (_e, info) => {
+    if (petWin && !petWin.isDestroyed()) {
+      petWin.webContents.send("cp:tooltip", { show: Boolean(info?.show), html: info?.html || "" });
+    }
   });
 
   // Pet -> shell: show/close the panel (and optionally carry a session or view).
@@ -275,21 +326,10 @@ app.whenReady().then(() => {
   });
   ipcMain.on("cp:pet-menu", () => petMenu());
   ipcMain.on("cp:bubble-menu", (_e, info) => bubbleMenu(info));
-
-  // Windows/macOS: the pet face toggles click-through itself; forward keeps the
-  // page receiving mouse moves so it can take input back over the sprite.
-  ipcMain.on("cp:ignore-mouse", (_e, ignore) => {
-    try {
-      petWin.setIgnoreMouseEvents(Boolean(ignore), { forward: true });
-    } catch {}
-  });
-
   ipcMain.on("cp:quit", () => app.quit());
 
   // Import a pet pack (.zip file or a folder) through a native dialog, then let
   // the brain copy it into ~/.cute-pets/pets/<id>/.
-  // A native dialog owned by an always-on-top window can open *behind* it, which
-  // looks like the button doing nothing. Drop the flag for the duration.
   const withDialog = async (parent, fn) => {
     const wasTop = parent.isAlwaysOnTop();
     if (wasTop) parent.setAlwaysOnTop(false);
@@ -356,8 +396,7 @@ app.whenReady().then(() => {
     if (!grab) return;
     // a real drag dismisses the panel; a plain click must not
     if (panelOpen && Math.abs(p.x - grab.start.x) + Math.abs(p.y - grab.start.y) > 4) hidePanel();
-    const b = petWin.getBounds();
-    const area = screen.getDisplayMatching(b).workArea;
+    const area = workArea(petWin);
     const pet = grab.pet;
     // allow the window to hang off-screen; keep the pet itself inside the work area
     const minX = area.x - pet.x;
@@ -381,20 +420,27 @@ app.whenReady().then(() => {
       panelPending = null;
     }
   });
+  // after the bubbles page loads it reports its size; if the panel is open it
+  // stays hidden, otherwise it appears on its own
+  bubbleWin.webContents.on("did-finish-load", positionBubbles);
 
   if (process.argv.includes("--dev")) startDevServer();
 });
 
-// Dev-only: capture/eval either window.
-// GET/POST http://127.0.0.1:4290/{shot,eval,size}[?file=&js=]        pet window
-//                              /panel-{shot,eval,size}             panel window
+// Dev-only: capture/eval any window.
+// GET/POST http://127.0.0.1:4290/{shot,eval,size}[?file=&js=]         pet
+//                              /bubble-…                            bubbles
+//                              /panel-…                             panel
 function startDevServer() {
-  const target = (url) => (url.pathname.startsWith("/panel-") ? panelWin : petWin);
+  const target = (url) =>
+    url.pathname.startsWith("/panel-") ? panelWin
+      : url.pathname.startsWith("/bubble-") ? bubbleWin
+        : petWin;
   http
     .createServer(async (req, res) => {
       const url = new URL(req.url, "http://127.0.0.1");
       const win = target(url);
-      const leaf = url.pathname.replace(/^\/panel-/, "/");
+      const leaf = url.pathname.replace(/^\/(panel|bubble)-/, "/");
       if (!win) { res.end("no window"); return; }
       if (leaf === "/shot") {
         const img = await win.webContents.capturePage();

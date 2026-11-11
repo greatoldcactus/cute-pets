@@ -23,15 +23,17 @@ of a local HTTP server — so a pet can be an equal peer instead of a notificati
 ```
 opencode serve ──HTTP + SSE──▶ brain (src/) ──HTTP + SSE──▶ faces
       ▲                            │                        ├─ faces/web
-      └──── plugin announce ───────┘                        ├─ pet window   (sprite + bubbles)
-                                                            └─ panel window (sessions + chat)
+      └──── plugin announce ───────┘                        ├─ pet window     (sprite)
+                                                            ├─ bubbles window (bubble stack)
+                                                            └─ panel window   (sessions + chat)
 ```
 
 - **Brain** (`src/`): no UI, no model logic. Holds the OpenCode client, the session/state
   machine, the permission queue, and serves snapshots to faces. Node 22+, zero deps.
 - **Faces**: render `{pet, sessions, permissions}` and post commands back. The Electron
-  shell is two windows (pet, panel) sharing one page by `#pet`/`#panel`; the web face is a
-  third surface. Same contract, so a platform problem never blocks features.
+  shell is three windows sharing one page by `#pet`/`#bubbles`/`#panel`; the web face is
+  another surface. Same contract, so a platform problem never blocks features. The sprite
+  window never resizes: the bubble and panel windows are sized/placed around it.
 - **Plugin** (`plugin/cute-pets.ts`): announces where a server lives. Optional — the brain
   also discovers servers by scanning listening ports of `opencode` processes.
 
@@ -117,21 +119,22 @@ base frames 192×208, OpenPets-style activity strips (`activities/<id>.webp`, 4�
 | | Windows | Linux X11 | Linux Wayland (native) | Linux Wayland (XWayland) |
 | --- | --- | --- | --- | --- |
 | transparent frameless | ✓ | ✓ | ✓ | ✓ |
-| click-through | ✓ (pet margin) | ✗ see note | ✗ see note | ✗ see note |
+| click-through | ✗ see note | ✗ see note | ✗ see note | ✗ see note |
 | drag pet | ✓ | ✓ | ✓ (draggable regions) | ✓ |
 | park at position | ✓ | ✓ | ✗ `setPosition` unsupported | ✓ |
 | always on top | ✓ | ✓ | ✗ `alwaysOnTop` unsupported | ✓ (compositor honors `_NET_WM_STATE_ABOVE`) |
 | global hotkey | ✓ | mostly | portal-restricted | same |
 
-Linux click-through note: `IgnoreMouseEventsOptions.forward` is Windows/macOS only, and
+Click-through note: `IgnoreMouseEventsOptions.forward` is Windows/macOS only, and
 XWayland derives a surface's input region from the X input shape. Electron's
 `setIgnoreMouseEvents(true)` empties that shape, and nothing can restore it from the page
-once it is empty. The Electron shell therefore keeps the pet window input-enabled on Linux
-and hugs its content instead (width `320`, height measured from the bubble stack). The
-session panel is a separate window: it is sized and placed from the room above/below the
-sprite when it opens, so opening it never resizes or moves the pet window. Anything outside
-either window is click-through simply because there is no window there. On Windows/macOS
-the pet window stays `320×400` and its unused margin is click-through via ignore+forward.
+once it is empty. Instead of click-through, the shell uses three content-sized windows:
+the sprite window is fixed (`260×222`, never resized), the bubble window is sized to the
+stack, and the panel window is sized to the room above/below the sprite when it opens.
+Each window covers only what it draws, so the space around them belongs to other apps,
+and nothing ever resizes the sprite window — a bubble appearing/disappearing or the panel
+opening cannot move the pet. The tooltip is drawn pointer-transparently in the pet window
+on behalf of the bubble window.
 
 Plan: one Electron binary (≥43). On Linux, detect `XDG_SESSION_TYPE=wayland` and default
 to `--ozone-platform=x11` so the pet can be parked and pinned; offer `--ozone-platform=wayland`
@@ -139,10 +142,11 @@ for native mode (positions are compositor-controlled, user drags once). If a tru
 Wayland-native pet is ever required, add a `gtk4-layer-shell` face — a third surface, not
 a rewrite, because the brain holds all state.
 
-Platform isolation: faces keep the OS-specific bits behind `placePet / setClickThrough /
-tray / notify / hotkey`. Tray is never the only door (GNOME needs AppIndicator), so the pet
-window must open the session menu and composer itself. Autostart: XDG desktop file,
-Run key, LaunchAgent. Packaging: AppImage first, deb/rpm later, no Flatpak in v1.
+Platform isolation: faces keep the OS-specific bits behind `placePet / placePanel /
+placeBubbles / tray / notify / hotkey`. Tray is never the only door (GNOME needs
+AppIndicator), so the pet window opens the shell-owned panel window, which carries the
+session menu and composer. Autostart: XDG desktop file, Run key, LaunchAgent. Packaging:
+AppImage first, deb/rpm later, no Flatpak in v1.
 
 ## 7b. Shell config
 
