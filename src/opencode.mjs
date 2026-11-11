@@ -56,6 +56,12 @@ export class OpenCodeClient {
   unshare(id) { return this.#req(`/session/${enc(id)}/share`, { method: "DELETE" }); }
   revert(id, messageID) { return this.post(`/session/${enc(id)}/revert`, { messageID }); }
   unrevert(id) { return this.post(`/session/${enc(id)}/unrevert`, {}); }
+  forkSession(id, messageID = null) {
+    return this.post(`/session/${enc(id)}/fork`, messageID ? { messageID } : {});
+  }
+  setTitle(id, title) {
+    return this.#req(`/session/${enc(id)}`, { method: "PATCH", body: JSON.stringify({ title }) });
+  }
   createSession(body = {}) { return this.post("/session", body); }
   prompt(id, text, extra = {}) {
     return this.post(`/session/${enc(id)}/prompt_async`, { parts: [{ type: "text", text }], ...extra });

@@ -175,8 +175,10 @@ persisting later; it is desktop-owned state, not a session concern.
   `content[]` instead of `parts[]` (user text is `m.text`), newest-first message order,
   `delivery:"queue"` for prompts, `interrupt` instead of `abort`, `{action,resources}`
   permission replies, and event translation
-  (`session.execution.*`/`session.text.*` → v1 names). Model/agent/compact/share/revert
-  are not implemented for v2.
+  (`session.execution.*`/`session.text.*` → v1 names). Fork is implemented
+  (`POST /api/session/{id}/fork`; `session.forked` carries no info, so the client fetches
+  the new session to pick up its `(fork #N)` title). Model/agent/compact/share/revert are
+  not implemented for v2.
 
 ## 8. Risks to verify
 

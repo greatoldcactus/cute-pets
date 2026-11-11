@@ -514,6 +514,7 @@ const PET_CMDS=[
   {name:"compact",  d:"summarize this conversation",        act:"compact"},
   {name:"undo",     d:"revert the last message",            act:"undo"},
   {name:"redo",     d:"restore reverted messages",          act:"redo"},
+  {name:"fork",     d:"fork this session at the latest message", act:"fork"},
   {name:"share",    d:"create a share link",                act:"share"},
   {name:"abort",    d:"stop the running session",           act:"abort"},
   {name:"pets",     d:"choose the pet",                     run:()=>{ setExpanded(true); showView("pets"); }},
@@ -589,11 +590,23 @@ async function choosePalette(i){
   if(cmd.act) return runAction(cmd.act);
 }
 
+async function forkSession(s){
+  try{
+    const r=await post("/api/session/action",{server:s.server,sessionId:s.id,action:"fork"});
+    // the shell returns the normalized child; show it at once instead of waiting
+    // for the next state snapshot
+    if(r.session) state.sessions=state.sessions.filter(x=>x.id!==r.session.id).concat(r.session);
+    const id=r.sessionId||r.session?.id;
+    if(id){ selected=id; msgKey=""; view="chat"; render(); }
+    return r;
+  }catch(e){ alert(String(e)); }
+}
 async function runAction(act){
   const s=currentSession();
   if(!s){ alert("pick a session first"); return; }
   try{
     if(act==="abort"){ await post("/api/abort",{server:s.server,sessionId:s.id}); return; }
+    if(act==="fork"){ await forkSession(s); return; }
     const r=await post("/api/session/action",{server:s.server,sessionId:s.id,action:act});
     if(act==="share"&&r.url){ try{ await navigator.clipboard.writeText(r.url); alert("Share link copied:\n"+r.url); }catch{ alert("Share link:\n"+r.url); } }
   }catch(e){ alert(String(e)); }
@@ -699,6 +712,7 @@ ctx.addEventListener("click",async e=>{
   const btn=e.target.closest("[data-act]"); const act=btn?.dataset.act; if(!act) return;
   const sid=btn?.dataset.sid; hideCtx();
   if(act==="s-open"){ selected=sid; msgKey=""; setExpanded(true); showView("chat"); return; }
+  if(act==="s-fork"){ const s=state.sessions.find(x=>x.id===sid); if(s) await forkSession(s); return; }
   if(act==="s-abort"){ const s=state.sessions.find(x=>x.id===sid); if(s) try{ await post("/api/abort",{server:s.server,sessionId:s.id}); }catch(err){} return; }
   if(act==="s-hide"){ const s=state.sessions.find(x=>x.id===sid); if(!s) return;
     try{ await post("/api/session/hide",{server:s.server,sessionId:s.id,hidden:true});
@@ -725,6 +739,7 @@ document.addEventListener("contextmenu",e=>{
   e.preventDefault();
   showMenu([
     {label:"Open",act:"s-open",id:s.id},
+    {label:"Fork",act:"s-fork",id:s.id},
     ...(s.state==="running"?[{label:"Stop",act:"s-abort",id:s.id}]:[]),
     "sep",
     {label:"Hide from pet",act:"s-hide",id:s.id},
