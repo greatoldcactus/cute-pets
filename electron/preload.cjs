@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("cp", {
   dragEnd: () => ipcRenderer.send("cp:drag-end"),
   setFacing: (facing) => ipcRenderer.send("cp:facing-set", facing),
   onFacing: (cb) => ipcRenderer.on("cp:facing", (_e, facing) => cb(facing)),
+  writeClipboard: (text) => ipcRenderer.invoke("cp:clipboard-write", text),
   importPet: (kind) => ipcRenderer.invoke("cp:pick-pet", kind),
   pickFolder: () => ipcRenderer.invoke("cp:pick-folder"),
 });

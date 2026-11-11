@@ -108,8 +108,9 @@ the session at the chosen location with the chosen model — no folder picker, n
 session left behind. OpenCode 2 hosts sessions at arbitrary locations on one server; v1
 keeps the old server-per-directory spawn. Messages render markdown:
 headings, lists, tables, links, inline code, and fenced code blocks with a language label
-and a copy button. Rendering is local and dependency-free, and everything is HTML-escaped
-before markup is added.
+and a copy button. Every user/assistant message with text also has a **copy** button
+(raw markdown) and selectable text. Rendering is local and dependency-free, and everything
+is HTML-escaped before markup is added.
 
 The chat opens at the newest message (normal chronological order, scrolled to the bottom);
 after reading back, a small **↓** button returns to the latest. Consecutive assistant
