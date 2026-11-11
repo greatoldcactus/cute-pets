@@ -733,7 +733,7 @@ async function startNewChat(){
 const PET_CMDS=[
   {name:"new",      d:"start a blank chat",                 run:()=>{ startDraft(); }},
   {name:"sessions", d:"show the session list",              run:()=>{ draft=null; setExpanded(true); showView("chat"); }},
-  {name:"cd",       d:"change the working directory",       run:()=>{ $("#prompt").value="/cd "; $("#prompt").focus(); }},
+  {name:"cd",       d:"change the working directory",       run:()=>{ $("#prompt").value="/cd "; openDirPalette(); $("#prompt").focus(); }},
   {name:"model",    d:"switch the model for this session",  pick:"model"},
   {name:"agent",    d:"switch agent (build, plan, explore)",pick:"agent"},
   {name:"compact",  d:"summarize this conversation",        act:"compact"},
@@ -779,6 +779,25 @@ async function ensureAgents(){
   return agentsList;
 }
 
+// Directories already in use, for /cd: current/last first, then the sessions.
+function dirChoices(){
+  const seen=new Map();
+  const add=(dir,why)=>{ if(dir&&!seen.has(dir)) seen.set(dir,{dir,why}); };
+  add(draft?.directory,"current");
+  add(currentSession()?.directory,"current");
+  add(defaults?.directory,"last used");
+  for(const s of state.sessions) add(s.directory,"session");
+  return [...seen.values()].sort((a,b)=>
+    (a.why==="current"?0:1)-(b.why==="current"?0:1) || a.dir.localeCompare(b.dir));
+}
+function openDirPalette(){
+  palMode="dirs";
+  palItems=dirChoices().map(d=>({kind:"dir",label:d.dir,sub:d.why,value:d.dir}));
+  palSel=0;
+  pal.classList.toggle("on",palItems.length>0);
+  pal.innerHTML=palItems.map((it,i)=>`<div class="pitem ${i===0?"sel":""}" data-i="${i}">
+      <span class="n">${esc(it.label)}</span><span class="d">${esc(it.sub)}</span></div>`).join("");
+}
 function openPalette(prefix="",mode="root"){
   palMode=mode;
   const q=prefix.toLowerCase();
@@ -804,6 +823,7 @@ function closePalette(){ pal.classList.remove("on"); pal.innerHTML=""; palItems=
 async function choosePalette(i){
   const it=palItems[i]; if(!it) return;
   if(it.kind==="command"){ $("#prompt").value=it.label+" "; closePalette(); $("#prompt").focus(); return; }
+  if(it.kind==="dir"){ closePalette(); $("#prompt").value=""; await changeDir(it.value); return; }
   if(it.kind==="model"||it.kind==="agent"){
     if(!currentSession()&&!draft) startDraft();
     const s=currentSession();
@@ -882,9 +902,25 @@ async function changeDir(p){
 
 $("#prompt").addEventListener("input",e=>{
   const v=e.target.value;
-  if(palMode!=="root"){ if(!v.startsWith("/")) closePalette(); else openPalette(v.slice(1).split(" ")[0], palMode); return; }
-  if(v.startsWith("/")) openPalette(v.slice(1).split(" ")[0]);
-  else closePalette();
+  if(palMode==="dirs"){
+    if(/^\/cd\s+$/.test(v)) return; // keep the directory suggestions
+    closePalette(); return;        // typing a path hides them; Enter will submit
+  }
+  if(/^\/cd\s+$/.test(v)){ openDirPalette(); return; }
+  if(palMode!=="root"){
+    if(!v.startsWith("/")) closePalette();
+    else openPalette(v.slice(1).split(" ")[0], palMode);
+    return;
+  }
+  if(v.startsWith("/")){
+    const rest=v.slice(1);
+    // once arguments start the palette is for command names only; let Enter
+    // submit the line instead of re-selecting /cd and wiping the argument
+    if(rest.includes(" ")){ closePalette(); return; }
+    openPalette(rest);
+    return;
+  }
+  closePalette();
 });
 $("#prompt").addEventListener("keydown",e=>{
   if(!pal.classList.contains("on")) return;
