@@ -173,9 +173,11 @@ The pet window never resizes: bubbles and the panel live in their own always-on-
 windows. A bubble appearing/disappearing, or the panel opening, therefore cannot move the
 sprite — the bubble window changes size on its own, hugging the stack and following her,
 and the panel window is sized to the room above the sprite (574 px when there is space,
-less when there is not) or placed below her when there is none. The new-chat popover (`+`)
-is a short panel window. Context menus are native menus, and the tooltip is drawn in the
-pet window (pointer-transparent) on behalf of the bubble window.
+less when there is not) or placed below her when there is none. The panel is 560 px wide by
+default; drag its left edge to resize it, and the chosen width is saved in
+`~/.cute-pets/config.json`. The new-chat popover (`+`) is a short panel window. Context
+menus are native menus, and the tooltip is drawn in the pet window (pointer-transparent)
+on behalf of the bubble window.
 
 **Hidden sessions** — pet-side only: the session keeps existing (and running) in OpenCode,
 it just stops appearing on the pet. Persisted in `~/.cute-pets/hidden.json`, restorable from
