@@ -173,6 +173,16 @@ border-radius:10px;box-shadow:0 -10px 26px rgba(0,0,0,.5);overflow:hidden;displa
 .palette.on{display:block}
 .queuestrip{flex-basis:100%;display:flex;flex-direction:column;gap:4px;max-height:100px;overflow-y:auto}
 .queuestrip:empty{display:none}
+/* A finished plan is handed to build from the chat, where it was just read.
+   The strip sits above the composer so it stays visible while scrolling. */
+.planstrip{flex-basis:100%;display:flex;gap:8px;align-items:center;background:#1d1730;
+border:1px solid #3f3168;border-radius:8px;padding:4px 7px;font-size:11px;color:#d9cffb}
+.planstrip:empty{display:none}
+.planstrip .ptag{flex:none;font-size:9px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--plan)}
+.planstrip .phint{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.planstrip .pbtn{flex:none;align-self:center;background:#2a2147;border-color:#3f3168;color:#d9cffb;
+padding:2px 8px;font-size:10.5px}
+.planstrip .pbtn:hover{border-color:#5b4a94}
 .qrow{display:flex;gap:6px;align-items:center;background:#171d2a;border:1px solid var(--line);border-radius:8px;padding:4px 7px;font-size:11px}
 .qrow .qmode{flex:none;font-size:9.5px;color:#9fd2ff;text-transform:uppercase;letter-spacing:.4px}
 .qrow .qtext{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
@@ -294,6 +304,7 @@ body.mode-panel .mini{left:0;right:0;top:0;bottom:auto;width:auto}
     <form class="composer" id="composer">
       <div class="palette" id="palette"></div>
       <div class="queuestrip" id="queued"></div>
+      <div class="planstrip" id="planready"></div>
       <textarea id="prompt" rows="5" placeholder="Message the selected session — / for commands · Ctrl+Enter to send" autocomplete="off"></textarea>
       <button type="submit">&#9166;</button>
     </form>
@@ -337,7 +348,7 @@ let expanded=IS_PANEL, selected=null, view="chat", filter="all", commands=[], ne
 let listHidden=false; // the sessions column is collapsible
 let draft=null, defaults=null; // a new chat before its first message
 let composerDrafts=new Map(), composerKey=""; // unsent text per chat/draft
-let submitDelivery=null, queuedKey=""; // one-shot /queue from the keyboard · queue strip cache
+let submitDelivery=null, queuedKey="", planReadySig=""; // one-shot /queue from the keyboard · queue/plan strips cache
 if(IS_PANEL){
   document.body.classList.add("expanded"); // the panel window only exists while open
   try{ listHidden=localStorage.getItem("cp.listHidden")==="1"; }catch{}
@@ -655,6 +666,20 @@ function renderQueued(){
       ${x.delivery==="queue"?`<button class="pbtn" type="button" data-queue-steer="${esc(x.id)}" title="Steer into the running turn">send now</button>`:""}
       <button class="pbtn" type="button" data-queue-cancel="${esc(x.id)}" title="Cancel queued message">&times;</button>
     </div>`).join("");
+}
+// A finished plan keeps the read-only plan agent and is marked planReady by the
+// brain when a plan turn reaches idle. Offer the hand-off in the chat, where the
+// plan was read. Text is required: a plan turn with no text has nothing to read.
+function renderPlanReady(){
+  const el=$("#planready"); if(!el) return;
+  const s=currentSession();
+  const ready=Boolean(view==="chat"&&s&&s.planReady&&s.agent==="plan"&&s.state==="idle"&&String(s.lastText||"").trim());
+  const sig=ready?`${s.id}|${s.title}`:"";
+  if(sig===planReadySig) return;
+  planReadySig=sig;
+  el.innerHTML=ready?`<span class="ptag">plan ready</span>
+      <span class="phint">switch to build and implement</span>
+      <button class="pbtn" type="button" data-plan-build title="Switch this session to build and send “Implement the plan.”">implement</button>`:"";
 }
 // New/pets/settings (and the draft hint) are static for a state snapshot: rebuild
 // only when their markup really changed, so a settings toggle or a pet pick is not
@@ -1273,7 +1298,7 @@ function render(){
     const c=state.pet?.counts||{};
     $("#psub").textContent=[plan?"planning":"",c.waiting?`${c.waiting} needs you`:"",c.running?`${c.running} working`:"",
       c.error?`${c.error} error`:"",`${c.idle||0} idle`].filter(Boolean).join(" · ")||"idle";
-    renderList(); renderPerms(); renderDetail(); renderForms(); renderQueued(); syncComposer();
+    renderList(); renderPerms(); renderDetail(); renderForms(); renderQueued(); renderPlanReady(); syncComposer();
     if(view==="pets") renderPetsList();
   }
   if(IS_BUBBLES) renderBubbles();
@@ -1283,6 +1308,8 @@ function render(){
 document.addEventListener("click",async e=>{
   const earlier=e.target.closest("[data-load-earlier]");
   if(earlier){ e.preventDefault(); await loadEarlier(); return; }
+  const impl=e.target.closest("[data-plan-build]");
+  if(impl){ e.preventDefault(); await buildAndImplement(impl); return; }
   const unh=e.target.closest("[data-act='s-unhide']");
   if(unh){ try{ await post("/api/session/hide",{sessionId:unh.dataset.sid,hidden:false}); }catch(err){ alert(String(err)); }
     showView("settings"); return; }
@@ -1587,6 +1614,32 @@ async function useAgent(name){
     msgKey=""; render();
     return true;
   }catch(e){ alert(String(e)); return false; }
+}
+
+// Hand a finished plan to the build agent from the plan-ready strip. Switching
+// first and prompting after it is the `/build Implement the plan.` path: the
+// brain waits for the plan plugin's synthetic reminder so both land in one turn.
+// The composer draft is deliberately left alone — the hand-off must not eat text
+// the user typed but did not send.
+const PLAN_HANDOFF="Implement the plan.";
+async function buildAndImplement(btn){
+  const s=currentSession();
+  if(!s) return;
+  if(btn) btn.disabled=true;
+  try{
+    await post("/api/session/action",{server:s.server,sessionId:s.id,action:"agent",value:"build"});
+    if(defaults) defaults.agent="build";
+    await post("/api/prompt",{sessionId:s.id,server:s.server,newSession:false,text:PLAN_HANDOFF});
+    // Optimistic, so the strip disappears at once instead of after the next snapshot.
+    s.agent="build"; s.state="running"; s.planReady=false;
+    msgKey=""; render();
+    setTimeout(async()=>{
+      await loadMessages(s);
+      const body=$("#dbody");
+      if(body) body.scrollTop=body.scrollHeight;
+      updateToBottom();
+    },700);
+  }catch(e){ alert(String(e)); if(btn) btn.disabled=false; }
 }
 
 // /effort: set the model variant (reasoning effort) on the session or draft.

@@ -83,3 +83,29 @@ test("queued inbox items are exposed without touching messages", () => {
   store.removeInbox(SERVER, "s1", "i1");
   assert.deepEqual(store.snapshot().sessions[0].queued, []);
 });
+
+test("a plan turn that finishes marks the session plan-ready", () => {
+  const store = newStore();
+  store.upsertSession(SERVER, { id: "s1", agent: "plan" });
+  store.setStatus(SERVER, "s1", { type: "busy" });
+  assert.equal(store.snapshot().sessions[0].planReady, false);
+
+  store.setStatus(SERVER, "s1", { type: "idle" });
+  assert.equal(store.snapshot().sessions[0].planReady, true);
+
+  // A new turn in plan mode is not a finished plan anymore.
+  store.setStatus(SERVER, "s1", { type: "busy" });
+  assert.equal(store.snapshot().sessions[0].planReady, false);
+  store.setStatus(SERVER, "s1", { type: "idle" });
+  assert.equal(store.snapshot().sessions[0].planReady, true);
+
+  // Leaving the plan agent makes the plan no longer actionable.
+  store.upsertSession(SERVER, { id: "s1", agent: "build" });
+  assert.equal(store.snapshot().sessions[0].planReady, false);
+});
+
+test("switching an idle session to plan does not mark it ready", () => {
+  const store = newStore();
+  store.upsertSession(SERVER, { id: "s1", agent: "plan" });
+  assert.equal(store.snapshot().sessions[0].planReady, false);
+});

@@ -168,6 +168,37 @@ try {
   console.log("assistant text:", JSON.stringify(text));
   console.log("tokens:", rec.tokens, "state:", rec.state, "title:", rec.title);
 
+  // --- plan hand-off ------------------------------------------------------
+  // The chat's "implement" strip appears when a plan turn finishes, then
+  // switches the session to build and sends the hand-off prompt.
+  const plan = await post(brainUrl, "/api/prompt", {
+    server: fakeUrl,
+    newSession: true,
+    title: "cute-pets smoke plan",
+    text: "Make a plan",
+    agent: "plan",
+  });
+  const planned = await waitForSession(brainUrl, plan.sessionId);
+  check(planned.rec.agent === "plan", `plan session changed agent: ${planned.rec.agent}`);
+  check(planned.rec.planReady === true, "a finished plan turn was not marked plan-ready");
+
+  await post(brainUrl, "/api/session/action", {
+    server: fakeUrl,
+    sessionId: plan.sessionId,
+    action: "agent",
+    value: "build",
+  });
+  await post(brainUrl, "/api/prompt", {
+    server: fakeUrl,
+    sessionId: plan.sessionId,
+    newSession: false,
+    text: "Implement the plan.",
+  });
+  const built = await waitForSession(brainUrl, plan.sessionId);
+  check(built.rec.agent === "build", `hand-off did not switch to build: ${built.rec.agent}`);
+  check(built.rec.planReady === false, "plan-ready flag survived the hand-off");
+  console.log("plan hand-off:", plan.sessionId, "->", built.rec.agent);
+
   // --- quota failure ------------------------------------------------------
   const failPort = await freePort();
   const failUrl = `http://127.0.0.1:${failPort}`;

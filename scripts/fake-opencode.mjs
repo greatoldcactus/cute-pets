@@ -201,6 +201,14 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { data: rows, cursor: null });
       }
       if (action === "inbox" && req.method === "GET") return json(res, 200, { data: [] });
+      if (action === "agent" && req.method === "POST") {
+        // Lets the plan-ready hand-off work against the stub: the brain refreshes
+        // the session from this response after switching the agent.
+        const body = await readBody(req);
+        if (body.agent) session.agent = body.agent;
+        session.time.updated = now();
+        return json(res, 200, { data: session });
+      }
       if (action === "prompt" && req.method === "POST") {
         prompt(session, await readBody(req));
         return json(res, 200, { data: {} });

@@ -94,7 +94,11 @@ the tail of the last message.
 read-only `plan` agent. The pet turns violet, uses the spritesheet's review row (row 8)
 with a violet aura. A question asked while planning still shows the amber **answer** badge
 and pulse, so the violet mode never hides that the agent is blocked on you. When a plan
-finishes it keeps a violet **plan ready** bubble instead of the normal ✓. `/build` switches back. Both commands also accept the message to send
+finishes it keeps a violet **plan ready** bubble instead of the normal ✓, and an open chat
+shows a violet **plan ready** strip above the composer with a small **implement** button.
+That button switches the session to build and sends `Implement the plan.` in one action —
+the same hand-off as `/build Implement the plan.`, so read the plan, then click once.
+`/build` switches back. Both commands also accept the message to send
 after switching, so `/build go` switches and sends `go` in one action; `/build` alone
 only switches and the next message starts the work. A pack that has no review pose simply
 keeps its idle frame; the violet aura still marks the mode.
