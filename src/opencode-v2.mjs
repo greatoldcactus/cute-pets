@@ -411,7 +411,15 @@ export class OpenCodeV2Client {
         case "session.idle":
           return onEvent({ type: "session.idle", properties: { sessionID: sid } });
         case "session.execution.failed":
-          return onEvent({ type: "session.error", properties: { sessionID: sid, error: { message: "execution failed" } } });
+          return onEvent({
+            type: "session.error",
+            properties: {
+              sessionID: sid,
+              error: d.error && typeof d.error === "object"
+                ? d.error
+                : { message: d.error ?? d.message ?? "execution failed" },
+            },
+          });
         case "session.reasoning.started":
           reasoningText.set(sid, "");
           return activity(sid, { kind: "thinking", text: "", status: "started" });

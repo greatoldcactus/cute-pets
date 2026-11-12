@@ -378,8 +378,18 @@ POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI 
 ## Development
 
 ```bash
-npm run smoke        # end-to-end: attach, create a session, prompt, read the reply
+npm run smoke        # hermetic end-to-end: fake OpenCode + brain, no provider
+npm run smoke:live   # live: real OpenCode + model (spends credits)
+npm test             # state-machine unit tests
 ```
+
+`npm run fake -- --port 4096` starts the fake OpenCode server on its own; point the
+brain at it with `npm run brain -- --server http://127.0.0.1:4096 --no-discover` to
+click through sessions offline.
+
+`npm run smoke:live` uses the attached server's default model. Set
+`CUTE_PETS_SMOKE_MODEL=provider/model` to pin one (for example
+`opencode-go/deepseek-v4.1-flash`) and avoid the pay-as-you-go default.
 
 `npm run shell -- --dev` exposes a control server on `:4290`: `/size`, `/eval?js=…` and
 `/shot?file=…` drive the pet window; `/bubble-…` and `/panel-…` do the same for the

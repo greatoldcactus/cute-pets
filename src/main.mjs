@@ -5,7 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
-import { readConfig, writeConfig } from "./config.mjs";
+import { readConfig, writeConfig, stateDir } from "./config.mjs";
 import { PetState, STATE } from "./state.mjs";
 import { OpenCodeClient } from "./opencode.mjs";
 import { OpenCodeV2Client } from "./opencode-v2.mjs";
@@ -58,8 +58,8 @@ async function waitForSyntheticSteer(client, sessionId, { moreThan = 0, timeoutM
   return pending;
 }
 
-const LOG_FILE = path.join(os.homedir(), ".cute-pets", "brain.log");
-const HIDDEN_FILE = path.join(os.homedir(), ".cute-pets", "hidden.json");
+const LOG_FILE = path.join(stateDir(), "brain.log");
+const HIDDEN_FILE = path.join(stateDir(), "hidden.json");
 
 // ---- directories ---------------------------------------------------------
 // v2 sessions can be created/moved at any directory the server's host can see;
@@ -120,12 +120,13 @@ const log = (...a) => {
 };
 
 function parseArgs(argv) {
-  const out = { port: 4280, host: "127.0.0.1", servers: [] };
+  const out = { port: 4280, host: "127.0.0.1", servers: [], discover: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--port") out.port = Number(argv[++i]);
     else if (a === "--host") out.host = argv[++i];
     else if (a === "--server") out.servers.push({ url: argv[++i], password: null });
+    else if (a === "--no-discover") out.discover = false;
     else if (a === "--password") {
       const pw = argv[++i];
       const last = out.servers[out.servers.length - 1];
@@ -937,7 +938,7 @@ class Hub {
 
 function writeDiscovery(port, host) {
   try {
-    const dir = path.join(os.homedir(), ".cute-pets");
+    const dir = stateDir();
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       path.join(dir, "brain.json"),
@@ -955,6 +956,7 @@ if (args.help) {
   --host <addr>     bind address (default 127.0.0.1)
   --server <url>    attach to an opencode server (repeatable; v1 or v2)
   --password <pw>   basic-auth password for OpenCode 2 (use after --server)
+  --no-discover     only use --server/config URLs; do not scan listening ports
 `);
   process.exit(0);
 }
@@ -979,14 +981,16 @@ for (const entry of readConfig().servers ?? []) {
   const distro = typeof entry === "string" ? null : entry.distro ?? null;
   if (url && !args.servers.includes(url)) await hub.attach(url, { password, distro }).catch(() => {});
 }
-await hub.discover();
-setInterval(() => { void hub.discover(); }, 10_000);
+if (args.discover) {
+  await hub.discover();
+  setInterval(() => { void hub.discover(); }, 10_000);
+  log("scanning for opencode servers every 10s");
+}
 // Titles (forks, generated names) and metadata can change without an event we
 // translate; a cheap refresh keeps the pet from showing stale "(untitled)" rows.
 setInterval(() => {
   for (const entry of hub.list()) void hub.sync(entry.client.baseUrl).catch(() => {});
 }, 30_000);
-log("scanning for opencode servers every 10s");
 
 process.on("SIGINT", async () => {
   await hub.close();

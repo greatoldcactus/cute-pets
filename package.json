@@ -9,7 +9,10 @@
     "shell": "electron electron/main.cjs",
     "start": "node src/main.mjs",
     "pets": "node scripts/pet.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "fake": "node scripts/fake-opencode.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:live": "node scripts/smoke-live.mjs",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=22"
