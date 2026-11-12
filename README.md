@@ -53,14 +53,18 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
 2. **Drag her** anywhere — across monitors or to the very top of the screen.
    Right-click the pet → **Move to display** to park her on another monitor.
    Double-click flips the sprite horizontally.
-3. **`+`** opens a blank chat in the last used directory (or the server's default).
-   Type `/cd /path` to change it, `/model` to pick a model, then send the first message.
+3. **`+`** opens a blank chat seeded from the session you are viewing — its directory,
+   model (including effort) and agent. With no session selected it falls back to the last
+   used values. Type `/cd /path` to change the directory, `/model` to pick a model,
+   `/effort` to choose its reasoning effort, then send the first message.
 4. **`/` in the composer** lists commands — agent ones (`/init`, `/review`) and pet ones
-   (`/cd`, `/fork`, `/model`, `/agent`, `/plan`, `/build`, `/compact`, `/undo`, `/redo`,
-   `/share`, `/abort`, `/pets`). Tab completes the highlighted command (or directory) into
-   the composer so you can keep typing; Enter runs the selection. After `/cd` the directory
-   suggestions stay open and filter as you type (they are the current/last directory and
-   every session's directory; type any other absolute path and press Enter).
+   (`/cd`, `/fork`, `/model`, `/effort`, `/agent`, `/plan`, `/build`, `/compact`, `/undo`,
+   `/redo`, `/share`, `/abort`, `/pets`). Tab completes the highlighted command (or
+   directory) into the composer so you can keep typing; Enter runs the selection. `/plan`
+   and `/build` can carry the message to send after switching (`/build go`). After
+   `/cd` the directory suggestions stay open and filter as you type (they are the
+   current/last directory and every session's directory; type any other absolute path and
+   press Enter).
 5. **Right-click a session or bubble → Hide from pet** to clear finished work out of the
    way. Nothing is deleted; Settings has an *unhide* list.
 
@@ -70,8 +74,10 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
 
 **Sessions** — every session with its real title, project directory, agent, model and
 token/cost totals, deduplicated across the several `opencode serve` processes that can
-share one database. Sessions that need you or are running come first; idle sessions are
-ordered by their last update (most recent first), so recent work stays findable.
+share one database. Sessions that need you come first, then failed ones, then running ones,
+each group in the order the sessions were created — a running session never jumps around
+just because it emitted a token. Idle sessions are ordered by their last update (most
+recent first), so recent work stays findable.
 
 **Forking** — `/fork` (or right-click a session → Fork) forks the selected session at its
 latest message through the server's own fork endpoint. The child is selected, keeps the
@@ -79,14 +85,19 @@ parent's title with `(fork #N)`, and appears immediately instead of as `(untitle
 
 **States** — `running`, `waiting` (an approval or an agent question is pending), `error`,
 `idle`, rolled up per pet with the urgent one winning. Bubbles float above the sprite for
-the sessions that need attention; hovering one shows its title, directory, state and the
-tail of the last message.
+the sessions that need attention. A waiting bubble carries an **answer** or **approve**
+badge and a pulsing amber dot, so a pending question is visible without opening the panel;
+hovering shows its title, directory, what it is waiting for, the question/permission and
+the tail of the last message.
 
 **Plan mode** — `/plan` switches the selected session (or the draft) to OpenCode's
 read-only `plan` agent. The pet turns violet, uses the spritesheet's review row (row 8)
-with a violet aura. When a plan finishes it keeps a violet **plan ready** bubble instead
-of the normal ✓. `/build` switches back. A pack that has no review pose simply keeps its
-idle frame; the violet aura still marks the mode.
+with a violet aura. A question asked while planning still shows the amber **answer** badge
+and pulse, so the violet mode never hides that the agent is blocked on you. When a plan
+finishes it keeps a violet **plan ready** bubble instead of the normal ✓. `/build` switches back. Both commands also accept the message to send
+after switching, so `/build go` switches and sends `go` in one action; `/build` alone
+only switches and the next message starts the work. A pack that has no review pose simply
+keeps its idle frame; the violet aura still marks the mode.
 
 **Questions (v2 forms)** — when the agent asks via OpenCode 2's form API, the session
 becomes `waiting` and a compact form card appears above the composer. It supports text,
@@ -95,22 +106,29 @@ required fields and external-link acknowledgements. Answers are posted back to t
 session through the brain, the form disappears and the session resumes.
 
 **Finished work stays visible.** When a session ends while the pet is running it keeps a
-dashed bubble with a ✓ (up to four, newest first), so you can see what just completed and
-open it — it leaves the pet only when you hide it, and a restart seeds the bubbles with
-anything that finished in the last 15 minutes.
+dashed bubble with a ✓ (the two most recent, newest nearest the pet), so you can see what
+just completed and open it — it leaves the pet only when you hide it, and a restart seeds
+the bubbles with anything that finished in the last 15 minutes. A new bubble is appended to
+the stack rather than pushing the others down, so the one you were about to click stays put.
 
 **Approvals** — permission requests are rendered as buttons: *once*, *always*, *reject*.
 Answered from the pet, the TUI never has to be found.
 
 **Chat** — type into any session from the panel, or start a new one. `+` opens a blank
-chat; `/cd` validates and sets the directory (on v2 it moves an existing session), and
-`/model` / `/agent` work in the draft as well as on a session. The first message creates
-the session at the chosen location with the chosen model — no folder picker, no untitled
+chat seeded from the session you are viewing (or the last used values); `/cd` validates
+and sets the directory (on v2 it moves an existing session), and `/model` / `/effort` /
+`/agent` work in the draft as well as on a session. The first message creates the session
+at the chosen location with the chosen model and effort — no folder picker, no untitled
 session left behind. The composer is a five-row textarea. By default **Ctrl/Cmd+Enter**
 sends and Enter adds a newline; Settings → Send message can switch to **Enter sends,
-Shift+Enter adds a newline**. Typed-but-unsent text is kept per session and restored when
-you switch back. OpenCode 2 hosts sessions at arbitrary locations on one server; v1 keeps
-the old server-per-directory spawn. Messages render markdown:
+Shift+Enter adds a newline**. While a turn is running, a normal send **steers** into
+that turn (OpenCode's default); `/queue <message>` waits for the current turn to finish,
+and **Ctrl/Cmd+Shift+Enter** does the same for the composer text. `/steer <message>`
+forces the opposite. Queued messages appear in a strip above the composer, where they can
+be cancelled or promoted with **send now**; the queue is OpenCode's own durable inbox, so
+it survives restarts and stays in sync with the TUI. Typed-but-unsent text is kept per
+session and restored when you switch back. OpenCode 2 hosts sessions at arbitrary locations
+on one server; v1 keeps the old server-per-directory spawn. Messages render markdown:
 headings, lists, tables, links, inline code, and fenced code blocks with a language label
 and a copy button. Every user/assistant message with text also has a **copy** button
 (raw markdown) and selectable text. Rendering is local and dependency-free, and everything
@@ -127,9 +145,18 @@ their input/output. While a session is running, the last trace shows a live line
 line: muted for aborted steps and for errors that were retried and followed by another
 assistant step, red only when the turn actually failed.
 
-**New chat** — a blank chat with the last directory and model shown in the header. `Ctrl+N`
-and the pet's right-click *New chat* reach the same thing. `/cd` and `/model` apply to the
-draft until the first message creates the session.
+**New chat** — a blank chat seeded from the session you are viewing: directory, model
+(including its effort variant) and agent. The header shows `provider/model#variant`
+so two providers exposing the same model ID stay distinguishable; hovering a clipped
+title or meta label reveals its full text. With nothing selected it
+falls back to the last used values. `Ctrl+N` and the pet's right-click *New chat* reach the
+same thing. `/cd`, `/model` and `/effort` apply to the draft until the first message creates
+the session.
+
+**Effort** — `/effort` lists the current model's catalog variants (`low`, `high`, `max`, …)
+plus `default` to reset. Models without variants show a short notice instead of an empty
+list. The active variant appears as `#variant` in the header and is carried into the next
+new chat.
 
 **Pet packs** — Codex/OpenPets-compatible spritesheets (192×208 cells, 8 columns). A
 red-armoured chibi knight ships in the repo and is installed by default; any `.zip` or
@@ -249,9 +276,13 @@ on a v2 server; if you send one, the run sits in `running` while the server retr
 (`session.retry.scheduled`) and never produces text. List what the server has with
 `GET /api/model` (e.g. `gemini-4-carbon`) and use that id.
 
-v2 differences the client already absorbs: prompts go out with `delivery: "queue"` (the
-default `steer` is dropped when no turn is running), messages are newest-first with
-`content[]` instead of `parts[]` and user text at `m.text`, permission replies use
+v2 differences the client already absorbs: a normal send uses `delivery:"queue"` on an
+idle session and `delivery:"steer"` while a turn is running or a mode reminder is pending;
+`/queue` forces queue. The durable inbox is read with `GET /api/session/{id}/inbox`,
+cancelled with
+`DELETE /api/session/{id}/inbox/{inboxID}` and promoted with
+`PATCH /api/session/{id}/inbox/{inboxID}`. Messages are newest-first with `content[]`
+instead of `parts[]` and user text at `m.text`, permission replies use
 `{action, resources}`, `/fork` is wired (`POST /api/session/{id}/fork`; the
 `session.forked` event is translated into a session fetch so the child's
 "… (fork #N)" title shows at once), `/model`/`/agent` use the v2 session routes,
@@ -297,6 +328,7 @@ Everything a face needs, all JSON:
 
 ```
 GET  /api/state            {pet, sessions[], permissions[], forms[], servers[], hidden[]}
+                             sessions carry `queued[]` (undelivered v2 inbox messages)
 GET  /api/events           SSE stream of the same snapshot
 GET  /api/health           {ok, uptime}
 GET  /api/pet  /api/pets   active pet + installed packs
@@ -304,11 +336,15 @@ POST /api/pets/import      {path}            .zip or folder
 POST /api/pets/active      {id}
 GET  /api/commands         agent commands from OpenCode (init, review, …)
 GET  /api/models  /api/agents  /api/workspaces
-GET  /api/defaults         {directory, server, model, agent}   last used / server default
+                             models carry providerID and variants[] (effort levels)
+GET  /api/defaults         {directory, server, model, agent}   fallback for a blank chat
 POST /api/checkdir         {directory, server?}  validate a path (v2; WSL-aware)
-POST /api/prompt           {text, sessionId?|newSession, directory?, server?, model?, agent?}
+POST /api/prompt           {text, sessionId?|newSession, directory?, server?, model?, agent?, delivery?}
+                             delivery: steer|queue (queue = wait for the current turn)
 GET  /api/messages         ?server=&sessionId=&limit=
 GET  /api/message-page     ?server=&sessionId=&limit=&order=&type=&cursor=&compact=1
+POST /api/inbox/cancel     {server, sessionId, inboxId}   cancel an undelivered message
+POST /api/inbox/steer      {server, sessionId, inboxId}   promote queue → steer
 POST /api/permission       {id, reply: once|always|reject}
 POST /api/form             {server, sessionId, formId, answer}   answer a v2 agent question
 POST /api/abort            {server, sessionId}

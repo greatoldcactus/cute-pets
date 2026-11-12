@@ -37,6 +37,27 @@ async function waitForHealth(url, timeoutMs = 20000) {
   }
   throw new Error(`server did not start: ${url}`);
 }
+
+// OpenCode's plan plugin admits a synthetic mode reminder with resume:false
+// right after a plan session is created or the agent changes to/from plan. The
+// admission happens a few ms after the create/switch response, so an immediate
+// follow-up prompt can race it. Waiting for the item lets that prompt steer
+// into the same turn instead of queueing behind the reminder.
+const isSyntheticSteer = (item) => item?.type === "synthetic" && item?.delivery === "steer";
+
+async function waitForSyntheticSteer(client, sessionId, { moreThan = 0, timeoutMs = 500 } = {}) {
+  if (client?.version !== "2" || typeof client?.inbox !== "function") return [];
+  const deadline = Date.now() + timeoutMs;
+  let pending = null;
+  while (Date.now() < deadline) {
+    const list = await client.inbox(sessionId).catch(() => null);
+    if (list) pending = list;
+    if ((pending?.filter(isSyntheticSteer).length ?? 0) > moreThan) break;
+    await sleep(20);
+  }
+  return pending;
+}
+
 const LOG_FILE = path.join(os.homedir(), ".cute-pets", "brain.log");
 const HIDDEN_FILE = path.join(os.homedir(), ".cute-pets", "hidden.json");
 
@@ -343,6 +364,25 @@ class Hub {
       this.store.reconcileSessions(url, sessions.map((s) => s.id));
     }
     this.store.replacePermissions(url, permissions ?? []);
+    if (typeof client.inbox === "function" && Array.isArray(sessions)) {
+      // Queue items can outlive a turn (for example after an interruption), so
+      // hydrate active sessions, sessions we already track an inbox for, and
+      // any session touched recently. Older idle sessions cannot have useful
+      // queue state and are skipped to keep attach cheap.
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      const candidates = sessions.filter((info) => {
+        const key = `${url}::${info.id}`;
+        if (this.store.inbox.has(key)) return true;
+        const rec = this.store.sessions.get(key);
+        if (rec && rec.state !== STATE.IDLE) return true;
+        if ((Number(info.time?.busy) || 0) > (Number(info.time?.idle) || 0)) return true;
+        return (Number(info.time?.updated) || 0) >= cutoff;
+      });
+      await Promise.all(candidates.map(async (info) => {
+        const list = await client.inbox(info.id).catch(() => null);
+        if (list) this.store.replaceInbox(url, info.id, list);
+      }));
+    }
     if (typeof client.forms === "function") {
       // Forms are scoped to a location, so one request per known directory (not
       // per session). v2 usually serves a single directory, so this is one call.
@@ -418,6 +458,20 @@ class Hub {
       case "form.replied":
       case "form.cancelled":
         if (p.id) this.store.removeForm(p.id);
+        break;
+      case "session.inbox.enqueued":
+        if (p.sessionID && p.item?.type === "user") {
+          this.store.upsertInbox(url, p.sessionID, { ...p.item, id: p.inboxID }, p.created);
+        }
+        break;
+      case "session.inbox.delivered":
+      case "session.inbox.cancelled":
+        if (p.sessionID && p.inboxID) this.store.removeInbox(url, p.sessionID, p.inboxID);
+        break;
+      case "session.inbox.delivery.changed":
+        if (p.sessionID && p.inboxID) {
+          this.store.setInboxDelivery(url, p.sessionID, p.inboxID, p.delivery);
+        }
         break;
       default:
         if (typeof ev?.type === "string" && ev.type.startsWith("permission.")) {
@@ -566,6 +620,7 @@ class Hub {
           name: info.name ?? modelID,
           free: /free/i.test(modelID),
           default: cfg?.default?.[provider.id] === modelID,
+          variants: [],
         });
       }
     }
@@ -593,7 +648,8 @@ class Hub {
           ? await client.getSession(sessionId)
           : await client.get(`/session/${sessionId}`);
         if (info) this.store.upsertSession(url, info);
-      } catch {}
+        return info ?? null;
+      } catch { return null; }
     };
 
     switch (action) {
@@ -605,12 +661,31 @@ class Hub {
         writeConfig({ lastModel: ref });
         return { ok: true, model: ref };
       }
-      case "agent":
+      case "agent": {
         if (!value) throw new Error("agent required");
+        // The plan plugin enqueues its mode reminder asynchronously after a
+        // switch to or from plan. Wait for it before answering so an immediate
+        // `/build <text>` or `/plan <text>` cannot race it into a queued,
+        // reminder-only turn. Other agent changes have no reminder to wait for.
+        const previous = (await refresh())?.agent ?? rec?.agent ?? null;
+        const expectReminder = client.version === "2" && value !== previous &&
+          (value === "plan" || previous === "plan");
+        let before = 0;
+        if (expectReminder) {
+          const pending = await client.inbox(sessionId).catch(() => []);
+          before = pending.filter(isSyntheticSteer).length;
+        }
         await client.setAgent(sessionId, value);
         await refresh();
+        if (client.version === "2" && typeof client.inbox === "function") {
+          const pending = expectReminder
+            ? await waitForSyntheticSteer(client, sessionId, { moreThan: before })
+            : await client.inbox(sessionId).catch(() => null);
+          if (pending) this.store.replaceInbox(url, sessionId, pending);
+        }
         writeConfig({ lastAgent: value });
         return { ok: true, agent: value };
+      }
       case "move": {
         if (!value?.directory) throw new Error("directory required");
         if (typeof client.moveSession !== "function") throw new Error("moving sessions needs OpenCode 2");
@@ -672,7 +747,7 @@ class Hub {
     return entry.client.commands();
   }
 
-  async prompt({ server, sessionId, newSession, title, text, command, directory, model, agent }) {
+  async prompt({ server, sessionId, newSession, title, text, command, directory, model, agent, delivery }) {
     // A new chat with an explicit directory: v2 servers host any location, so use
     // one of them instead of spawning a server per folder. v1 falls back to the
     // old server-per-directory behaviour inside resolveDirectory.
@@ -693,6 +768,7 @@ class Hub {
     }
     const { client } = entry;
     let id = sessionId;
+    let createdPlan = false;
     if (!id || newSession) {
       const opts = {};
       if (title) opts.title = title;
@@ -701,6 +777,7 @@ class Hub {
       if (dir && client.version === "2") opts.location = { directory: dir };
       const sess = await client.createSession(opts);
       id = sess.id;
+      createdPlan = sess.agent === "plan" || (sess.agent == null && opts.agent === "plan");
       this.store.upsertSession(url, sess);
       const lastDirectory = dir || sess.directory || readConfig().lastDirectory;
       if (lastDirectory) {
@@ -710,20 +787,10 @@ class Hub {
         writeConfig(patch);
       }
     }
-    let rec = this.store.sessions.get(`${url}::${id}`);
+    const rec = this.store.sessions.get(`${url}::${id}`);
     const wasRunning = rec?.state === STATE.RUNNING;
-    let sessionAgent = agent ?? rec?.agent ?? null;
-    // A session switched to plan by another client may still look agent-less in
-    // our store; ask once so the next prompt can join its plan-mode turn.
-    if (!sessionAgent && client.version === "2" && typeof client.getSession === "function") {
-      const info = await client.getSession(id).catch(() => null);
-      if (info) {
-        this.store.upsertSession(url, info);
-        sessionAgent = info.agent ?? null;
-        rec = this.store.sessions.get(`${url}::${id}`);
-      }
-    }
-    const isPlan = sessionAgent === "plan";
+    const wasWaiting = rec?.state === STATE.WAITING;
+    const explicit = delivery === "queue" || delivery === "steer" ? delivery : null;
     if (rec) {
       rec.state = STATE.RUNNING;
       rec.updatedAt = Date.now();
@@ -735,19 +802,39 @@ class Hub {
         .command(id, { command, args: text ?? "" })
         .catch((err) => log(`command ${command} failed: ${err.message ?? err}`));
     } else {
-      // Plan mode starts its own synthetic turn as soon as the session is created
-      // or switched to the plan agent. Queueing the first prompt would answer that
-      // synthetic reminder ("there is no request") before the user's message.
-      // Steering it into the same turn avoids the empty round-trip.
-      let extra = null;
-      if (client.version === "2" && isPlan) {
-        const pending = typeof client.inbox === "function"
-          ? await client.inbox(id).catch(() => [])
-          : [];
-        const planReminder = pending.some((item) => item.type === "synthetic" && item.delivery === "steer");
-        if (wasRunning || planReminder) extra = { delivery: "steer" };
+      // OpenCode's plan plugin admits a synthetic mode reminder (delivery
+      // "steer", resume:false) when a plan session is created or the agent
+      // changes to/from plan. It does not start a turn by itself; the next
+      // prompt wakes the session. A prompt sent as "queue" then waits behind
+      // the reminder's empty turn, which looks like the agent answered an
+      // empty message. Steer it so both land in the same turn.
+      let pending = [];
+      if (client.version === "2" && typeof client.inbox === "function") {
+        const list = createdPlan
+          ? await waitForSyntheticSteer(client, id, { moreThan: 0 })
+          : await client.inbox(id).catch(() => null);
+        if (list) pending = list;
       }
-      await client.prompt(id, text, extra ?? undefined);
+      const syntheticSteer = pending.some(isSyntheticSteer);
+      // Steering is the OpenCode default for a follow-up sent while a turn is
+      // running. A turn paused on an approval/form is still active. Queueing is
+      // opt-in through /queue; on an idle session the queued input starts the
+      // turn, so no explicit delivery is needed.
+      let extra = null;
+      if (client.version === "2") {
+        if (explicit === "queue") extra = { delivery: "queue" };
+        else if (explicit === "steer") {
+          if (wasRunning || wasWaiting || syntheticSteer) extra = { delivery: "steer" };
+        } else if (wasRunning || wasWaiting || syntheticSteer) {
+          extra = { delivery: "steer" };
+        }
+      }
+      const out = await client.prompt(id, text, extra ?? undefined);
+      // v2 returns the admitted inbox item, so the face can show it in the queue
+      // strip before the event stream catches up.
+      if (client.version === "2" && out?.data?.id) {
+        this.store.upsertInbox(url, id, out.data);
+      }
     }
     const session = this.store.snapshot().sessions.find((s) => s.id === id) ?? null;
     return { server: url, sessionId: id, session };
@@ -791,6 +878,26 @@ class Hub {
     if (typeof entry.client.replyForm !== "function") throw new Error("forms need OpenCode 2");
     await entry.client.replyForm(sessionId, formId, answer);
     this.store.removeForm(formId);
+    return { ok: true };
+  }
+
+  async cancelInbox({ server, sessionId, inboxId }) {
+    const url = this.pickServer(server);
+    const entry = url && this.clients.get(url);
+    if (!entry || !sessionId || !inboxId) throw new Error("server, sessionId and inboxId required");
+    if (typeof entry.client.cancelInbox !== "function") throw new Error("queued messages need OpenCode 2");
+    await entry.client.cancelInbox(sessionId, inboxId);
+    this.store.removeInbox(url, sessionId, inboxId);
+    return { ok: true };
+  }
+
+  async steerInbox({ server, sessionId, inboxId }) {
+    const url = this.pickServer(server);
+    const entry = url && this.clients.get(url);
+    if (!entry || !sessionId || !inboxId) throw new Error("server, sessionId and inboxId required");
+    if (typeof entry.client.setInboxDelivery !== "function") throw new Error("queued messages need OpenCode 2");
+    await entry.client.setInboxDelivery(sessionId, inboxId, "steer");
+    this.store.setInboxDelivery(url, sessionId, inboxId, "steer");
     return { ok: true };
   }
 
