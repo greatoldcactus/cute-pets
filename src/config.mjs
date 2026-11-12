@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 export function stateDir() {
-  return path.join(os.homedir(), ".cute-pets");
+  // Tests and portable installs can point the brain at an isolated directory.
+  return process.env.CUTE_PETS_STATE_DIR || path.join(os.homedir(), ".cute-pets");
 }
 
 export function configPath() {

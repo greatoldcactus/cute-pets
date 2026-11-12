@@ -294,7 +294,8 @@ Wayland may still refuse programmatic positioning; the shell's XWayland mode is 
 ## 9. Status
 
 Done: brain daemon with discovery, state machine, permission queue, SSE fanout; web face
-(tray + approvals + chat); plugin; smoke test that drives a real session end-to-end.
+(tray + approvals + chat); plugin; hermetic smoke test against a fake OpenCode server,
+plus an opt-in live smoke against a real session.
 
 Next: Electron pet face with sprite rendering; TUI jump; question requests; token auth;
 packaging.
