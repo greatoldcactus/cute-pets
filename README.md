@@ -127,8 +127,10 @@ and **Ctrl/Cmd+Shift+Enter** does the same for the composer text. `/steer <messa
 forces the opposite. Queued messages appear in a strip above the composer, where they can
 be cancelled or promoted with **send now**; the queue is OpenCode's own durable inbox, so
 it survives restarts and stays in sync with the TUI. Typed-but-unsent text is kept per
-session and restored when you switch back. OpenCode 2 hosts sessions at arbitrary locations
-on one server; v1 keeps the old server-per-directory spawn. Messages render markdown:
+session and restored when you switch back. The **☰** button in the panel header
+(**Ctrl/Cmd+B**) hides the sessions column so the chat fills the whole panel. OpenCode 2
+hosts sessions at arbitrary locations on one server; v1 keeps the old server-per-directory
+spawn. Messages render markdown:
 headings, lists, tables, links, inline code, and fenced code blocks with a language label
 and a copy button. Every user/assistant message with text also has a **copy** button
 (raw markdown) and selectable text. Rendering is local and dependency-free, and everything

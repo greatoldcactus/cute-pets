@@ -28,6 +28,7 @@ header button:hover{color:var(--ink);background:#20242f}
 .body{display:flex;flex:1;min-height:0}
 .col{min-width:0;display:flex;flex-direction:column}
 .col.list{width:232px;border-right:1px solid var(--line)}
+body.list-hidden .col.list{display:none}
 .colhead{display:flex;align-items:center;gap:6px;padding:7px 9px;font-size:11px;color:var(--dim);
 text-transform:uppercase;letter-spacing:.07em}
 #sessions{overflow:auto;padding:0 7px 7px;display:flex;flex-direction:column;gap:5px}
@@ -267,6 +268,7 @@ body.mode-panel .mini{left:0;right:0;top:0;bottom:auto;width:auto}
   <section class="panel">
     <div id="panelResize" title="Drag to resize"></div>
     <header>
+      <button id="btnList" title="Hide sessions (Ctrl+B)" aria-pressed="true">&#9776;</button>
       <div class="dot" id="dot"></div>
       <div style="min-width:0"><div class="h1" id="petname">pet</div><div class="h2" id="psub">starting…</div></div>
       <div class="sp"></div>
@@ -332,10 +334,15 @@ const B="";
 let state={pet:{state:"idle"},sessions:[],permissions:[],forms:[],servers:[]};
 let finishedIds=[], prevStates=new Map(), firstRender=false;   // sessions that ended while we were watching
 let expanded=IS_PANEL, selected=null, view="chat", filter="all", commands=[], newDir=null, workspaces=[];
+let listHidden=false; // the sessions column is collapsible
 let draft=null, defaults=null; // a new chat before its first message
 let composerDrafts=new Map(), composerKey=""; // unsent text per chat/draft
 let submitDelivery=null, queuedKey=""; // one-shot /queue from the keyboard · queue strip cache
-if(IS_PANEL) document.body.classList.add("expanded"); // the panel window only exists while open
+if(IS_PANEL){
+  document.body.classList.add("expanded"); // the panel window only exists while open
+  try{ listHidden=localStorage.getItem("cp.listHidden")==="1"; }catch{}
+  applyListHidden();
+}
 
 /* ---------------- sprite ---------------- */
 const FW=192,FH=208,FRAMES=8;
@@ -442,6 +449,18 @@ function setExpanded(on){
   document.body.classList.toggle("minimized",!on);
 }
 function showView(v){ view=v; if(v!=="chat") draft=null; render(); }
+function applyListHidden(){
+  document.body.classList.toggle("list-hidden",listHidden);
+  const b=$("#btnList");
+  if(!b) return;
+  b.title=listHidden?"Show sessions (Ctrl+B)":"Hide sessions (Ctrl+B)";
+  b.setAttribute("aria-pressed",listHidden?"true":"false");
+}
+function setListHidden(hidden){
+  listHidden=hidden;
+  applyListHidden();
+  try{ localStorage.setItem("cp.listHidden",hidden?"1":"0"); }catch{}
+}
 // A new chat inherits the chat it is started from: its directory, model (with
 // the picked effort variant) and agent. With nothing selected it falls back to
 // the last-used defaults, then to the first known workspace.
@@ -1309,6 +1328,7 @@ document.addEventListener("click",async e=>{
   if(aura){ applyAuras(aura.dataset.auras==="on"); api.setAuras(aurasEnabled); render(); return; }
   const sendMode=e.target.closest("[data-send-with]");
   if(sendMode){ applySendWith(sendMode.dataset.sendWith); api.setSendWith(sendWith); render(); return; }
+  if(e.target.id==="btnList"){ setListHidden(!listHidden); return; }
   if(e.target.id==="btnNew"){ startDraft(); return; }
   if(e.target.id==="miniX"){ setExpanded(false); return; }
   if(e.target.id==="miniDirBtn"){ const r=await api.pickFolder(); if(r&&r.ok){ newDir=r.path; $("#miniDir").textContent=r.path; } return; }
@@ -1925,6 +1945,9 @@ document.addEventListener("contextmenu",e=>{
 document.addEventListener("mousedown",e=>{ if(!e.target.closest("#ctx")&&!e.target.closest("#pet")) hideCtx(); });
 window.addEventListener("keydown",e=>{
   if(e.key==="Escape"){ hideCtx(); closePalette(); }
+  if(IS_PANEL&&(e.ctrlKey||e.metaKey)&&!e.shiftKey&&!e.altKey&&e.key.toLowerCase()==="b"){
+    e.preventDefault(); setListHidden(!listHidden); return;
+  }
   if(e.ctrlKey&&e.key.toLowerCase()==="n"){
     e.preventDefault();
     if(IS_PET) api.panel({open:true,action:"new"});
