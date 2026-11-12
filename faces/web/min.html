@@ -25,6 +25,39 @@ body.mode-panel #panelResize{display:block}
 header .sp{flex:1}
 header button{background:transparent;border:0;color:var(--dim);font-size:15px;cursor:pointer;padding:2px 5px;border-radius:6px}
 header button:hover{color:var(--ink);background:#20242f}
+/* active-sessions badge: only while the sessions column is hidden */
+.actwrap{position:relative;display:none;z-index:40}
+body.mode-panel.list-hidden .actwrap{display:block}
+#btnActivity{display:flex;align-items:center;justify-content:center;gap:4px;min-width:27px;height:26px;
+ padding:0 7px;border:1px solid var(--line);border-radius:999px;background:#1b1f2b;color:var(--dim);
+ font-size:10.5px;font-weight:700;line-height:1;flex:none}
+#btnActivity:hover,#btnActivity:focus-visible{color:var(--ink);background:#20242f;border-color:var(--line2)}
+#btnActivity .actdot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:none}
+#btnActivity.waiting{border-color:#6d5420;background:#2a2110;color:var(--wait)}
+#btnActivity.waiting .actdot{background:var(--wait);box-shadow:0 0 6px rgba(255,198,92,.8);animation:apulse 1.4s ease-in-out infinite}
+#btnActivity.error{border-color:#4a2020;background:#2a1414;color:var(--err)}
+#btnActivity.error .actdot{background:var(--err)}
+#btnActivity.running{border-color:#1d3c52;background:#10222d;color:var(--run)}
+#btnActivity.running .actdot{background:var(--run)}
+#btnActivity.idle .actdot{background:var(--ok)}
+#activityCount{color:inherit}
+@keyframes apulse{50%{opacity:.3}}
+@media (prefers-reduced-motion:reduce){#btnActivity.waiting .actdot{animation:none}}
+.actpop{position:absolute;top:100%;right:0;width:min(340px,calc(100vw - 28px));max-height:min(380px,60vh);
+ overflow:auto;display:none;flex-direction:column;gap:4px;padding:6px;background:#161922;border:1px solid var(--line2);
+ border-radius:10px;box-shadow:0 16px 34px rgba(0,0,0,.65);z-index:45}
+.actwrap.on .actpop{display:flex}
+.acthead{font-size:9px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim);padding:2px 4px 3px}
+#activityPop .actrow{display:flex;align-items:flex-start;gap:7px;width:100%;background:var(--card);
+ border:1px solid var(--line);border-radius:8px;padding:6px 8px;color:var(--ink);font:inherit;
+ font-size:11px;text-align:left;cursor:pointer}
+#activityPop .actrow:hover{border-color:var(--line2);background:#1b2130}
+#activityPop .actrow.sel{border-color:#4b5a7e;background:#1b2130}
+#activityPop .actrow .chip{margin-top:0}
+#activityPop .amain{min-width:0;flex:1;display:flex;flex-direction:column;gap:1px}
+#activityPop .atitle{font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#activityPop .asub{font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#activityPop .actempty{font-size:11px;color:var(--dim);text-align:center;padding:14px 8px}
 .body{display:flex;flex:1;min-height:0}
 .col{min-width:0;display:flex;flex-direction:column}
 .col.list{width:232px;border-right:1px solid var(--line)}
@@ -282,6 +315,12 @@ body.mode-panel .mini{left:0;right:0;top:0;bottom:auto;width:auto}
       <div class="dot" id="dot"></div>
       <div style="min-width:0"><div class="h1" id="petname">pet</div><div class="h2" id="psub">starting…</div></div>
       <div class="sp"></div>
+      <div class="actwrap" id="activityWrap">
+        <button id="btnActivity" title="Active sessions" aria-haspopup="dialog" aria-expanded="false" aria-controls="activityPop">
+          <span class="actdot"></span><span id="activityCount">&#10003;</span>
+        </button>
+        <div class="actpop" id="activityPop" role="dialog" aria-label="Active sessions"></div>
+      </div>
       <button id="btnNew" title="New chat (Ctrl+N)">+</button>
       <button id="btnSettings" title="Settings">&#9881;</button>
       <button id="collapse" title="Collapse">&#10005;</button>
@@ -346,6 +385,7 @@ let state={pet:{state:"idle"},sessions:[],permissions:[],forms:[],servers:[]};
 let finishedIds=[], prevStates=new Map(), firstRender=false;   // sessions that ended while we were watching
 let expanded=IS_PANEL, selected=null, view="chat", filter="all", commands=[], newDir=null, workspaces=[];
 let listHidden=false; // the sessions column is collapsible
+let activitySig="", activityOpen=false, activityPinned=false, activityHoverTimer=0;
 let draft=null, defaults=null; // a new chat before its first message
 let composerDrafts=new Map(), composerKey=""; // unsent text per chat/draft
 let submitDelivery=null, queuedKey="", planReadySig=""; // one-shot /queue from the keyboard · queue/plan strips cache
@@ -470,7 +510,29 @@ function applyListHidden(){
 function setListHidden(hidden){
   listHidden=hidden;
   applyListHidden();
+  if(!hidden) closeActivity(true);
   try{ localStorage.setItem("cp.listHidden",hidden?"1":"0"); }catch{}
+}
+function closeActivity(force=false){
+  if(!force && activityPinned) return;
+  clearTimeout(activityHoverTimer);
+  activityPinned=false;
+  activityOpen=false;
+  $("#activityWrap")?.classList.remove("on");
+  $("#btnActivity")?.setAttribute("aria-expanded","false");
+}
+function openActivity(pin=false){
+  const wrap=$("#activityWrap"), btn=$("#btnActivity");
+  if(!wrap||!btn) return;
+  activityOpen=true;
+  if(pin) activityPinned=true;
+  wrap.classList.add("on");
+  btn.setAttribute("aria-expanded","true");
+}
+function toggleActivity(){
+  clearTimeout(activityHoverTimer);
+  if(activityOpen&&activityPinned){ closeActivity(true); return; }
+  openActivity(true);
 }
 // A new chat inherits the chat it is started from: its directory, model (with
 // the picked effort variant) and agent. With nothing selected it falls back to
@@ -576,6 +638,61 @@ function syncBubbleSize(){
   if(key===bubbleKey) return;
   bubbleKey=key;
   api.bubblesSize({width:w,height:h});
+}
+// Compact active-session list for the header badge. It deliberately leaves
+// approval buttons in the sessions column: this view is for spotting and
+// selecting a session, not for duplicating the approval UI.
+function activitySub(s){
+  const pending=s.pending||[], forms=s.forms||[];
+  if(s.state==="waiting"){
+    if(pending.length) return `approve · ${pending[0].permission||"request"}${pending.length>1?` +${pending.length-1}`:""}`;
+    if(forms.length) return `answer · ${forms[0].title||"question"}${forms.length>1?` +${forms.length-1}`:""}`;
+    return "needs you";
+  }
+  if(s.state==="error") return s.dirName?`error · ${s.dirName}`:"error";
+  if(s.state==="running") return s.agent==="plan"
+    ? `planning${s.dirName?` · ${s.dirName}`:""}`
+    : `working${s.agent?` · ${s.agent}`:s.dirName?` · ${s.dirName}`:""}`;
+  return s.dirName||"";
+}
+function renderActivity(){
+  if(!IS_PANEL) return;
+  const active=state.sessions.filter(s=>s.state!=="idle");
+  const counts={waiting:0,error:0,running:0};
+  for(const s of active) if(counts[s.state]!==undefined) counts[s.state]++;
+  const sig=JSON.stringify([selected,active.map(s=>[
+    s.id,s.state,s.title,s.agent,s.dirName,
+    (s.pending||[]).map(p=>[p.id,p.permission]),
+    (s.forms||[]).map(f=>[f.id,f.title]),
+  ])]);
+  if(sig===activitySig) return;
+  activitySig=sig;
+  const lead=counts.waiting?"waiting":counts.error?"error":counts.running?"running":"idle";
+  const btn=$("#btnActivity");
+  if(btn){
+    btn.classList.remove("waiting","error","running","idle");
+    btn.classList.add(lead);
+    $("#activityCount").textContent=active.length?String(active.length):"✓";
+    const parts=[
+      counts.waiting?`${counts.waiting} needs you`:"",
+      counts.running?`${counts.running} running`:"",
+      counts.error?`${counts.error} error`:"",
+    ].filter(Boolean);
+    btn.title=parts.join(" · ")||"no active sessions";
+    btn.setAttribute("aria-label",parts.join(", ")||"No active sessions");
+  }
+  const pop=$("#activityPop");
+  if(!pop) return;
+  pop.innerHTML=active.length
+    ? `<div class="acthead">active sessions</div>`+active.map(s=>{
+        const label=s.agent==="plan"&&s.state==="running"?"plan"
+          :s.agent==="plan"&&s.state==="waiting"?"answer":s.state;
+        return `<button type="button" class="actrow${s.id===selected?" sel":""}" data-session="${esc(s.id)}" title="${esc(s.title||"(untitled)")}">
+          <span class="chip ${esc(s.state)}${s.agent==="plan"&&s.state!=="waiting"?" plan":""}">${esc(label)}</span>
+          <span class="amain"><span class="atitle">${esc(s.title||"(untitled)")}</span>
+          <span class="asub">${esc(activitySub(s))}</span></span></button>`;
+      }).join("")
+    : `<div class="actempty">no running or waiting sessions</div>`;
 }
 // Snapshot-driven rendering reuses rows instead of rebuilding the list: the
 // brain pushes state ~8x/s while sessions stream, and replacing the row under
@@ -1299,6 +1416,7 @@ function render(){
     $("#psub").textContent=[plan?"planning":"",c.waiting?`${c.waiting} needs you`:"",c.running?`${c.running} working`:"",
       c.error?`${c.error} error`:"",`${c.idle||0} idle`].filter(Boolean).join(" · ")||"idle";
     renderList(); renderPerms(); renderDetail(); renderForms(); renderQueued(); renderPlanReady(); syncComposer();
+    renderActivity();
     if(view==="pets") renderPetsList();
   }
   if(IS_BUBBLES) renderBubbles();
@@ -1306,6 +1424,8 @@ function render(){
 
 /* ---------------- interactions ---------------- */
 document.addEventListener("click",async e=>{
+  if(e.target.closest("#btnActivity")){ toggleActivity(); return; }
+  if(!e.target.closest("#activityWrap")) closeActivity(true);
   const earlier=e.target.closest("[data-load-earlier]");
   if(earlier){ e.preventDefault(); await loadEarlier(); return; }
   const impl=e.target.closest("[data-plan-build]");
@@ -1344,6 +1464,7 @@ document.addEventListener("click",async e=>{
   }
   const row=e.target.closest("[data-session]");
   if(row){
+    closeActivity(true);
     if(!IS_PANEL){ api.panel({open:true,sessionId:row.dataset.session}); return; }
     draft=null; selected=row.dataset.session; msgKey=""; showView("chat"); return;
   }
@@ -1373,6 +1494,18 @@ document.addEventListener("click",async e=>{
 });
 
 $("#filter").addEventListener("change",render);
+
+const activityWrap=$("#activityWrap");
+if(activityWrap){
+  activityWrap.addEventListener("mouseenter",()=>{
+    clearTimeout(activityHoverTimer);
+    activityHoverTimer=setTimeout(()=>{ if(!activityOpen) openActivity(false); },160);
+  });
+  activityWrap.addEventListener("mouseleave",()=>{
+    clearTimeout(activityHoverTimer);
+    closeActivity(false);
+  });
+}
 
 function openMini(){
   newDir=newDir||workspaces[0]?.directory||null;
@@ -1997,7 +2130,7 @@ document.addEventListener("contextmenu",e=>{
 });
 document.addEventListener("mousedown",e=>{ if(!e.target.closest("#ctx")&&!e.target.closest("#pet")) hideCtx(); });
 window.addEventListener("keydown",e=>{
-  if(e.key==="Escape"){ hideCtx(); closePalette(); }
+  if(e.key==="Escape"){ hideCtx(); closePalette(); closeActivity(true); }
   if(IS_PANEL&&(e.ctrlKey||e.metaKey)&&!e.shiftKey&&!e.altKey&&e.key.toLowerCase()==="b"){
     e.preventDefault(); setListHidden(!listHidden); return;
   }
@@ -2079,6 +2212,7 @@ if(api.onPanel) api.onPanel(s=>{
 // shell -> panel: what to show when the panel window is opened
 if(api.onPanelCommand) api.onPanelCommand(c=>{
   if(!IS_PANEL) return;
+  closeActivity(true);
   expanded=true;
   document.body.classList.add("expanded");
   if(c.action==="new"){ startDraft(); return; }
