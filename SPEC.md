@@ -217,6 +217,7 @@ AppImage first, deb/rpm later, no Flatpak in v1.
 | `lastAgent` | string | last agent picked with `/agent`; fallback for a blank chat |
 | `auras` | boolean (default `true`) | coloured glow around the pet for idle/running/waiting/error/plan |
 | `sendWith` | `"ctrl-enter"` (default) \| `"enter"` | whether Ctrl/Cmd+Enter or Enter sends; in Enter mode Shift+Enter adds a newline |
+| `panelWidth` | number (default `560`) | preferred panel width in px; drag the panel's left edge to change it. Clamped to 460–1200 and the display work area |
 | `petPosition` | `{x,y}` | last pet window position in screen coordinates; restored if it still overlaps a display |
 
 Precedence: `--facing` CLI flag → config file → default. Changing facing in the UI

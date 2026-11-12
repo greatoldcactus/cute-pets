@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("cp", {
   // the bubbles report their content size, and the tooltip is drawn by the pet.
   panel: (info) => ipcRenderer.send("cp:panel", info),
   panelSize: (info) => ipcRenderer.send("cp:panel-size", info),
+  panelResize: (info) => ipcRenderer.send("cp:panel-resize", info),
   bubblesSize: (size) => ipcRenderer.send("cp:bubbles-size", size),
   tooltip: (info) => ipcRenderer.send("cp:tooltip", info),
   onTooltip: (cb) => ipcRenderer.on("cp:tooltip", (_e, info) => cb(info)),

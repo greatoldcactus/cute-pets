@@ -15,7 +15,9 @@ const os = require("node:os");
 const BRAIN = process.env.CP_URL || "http://127.0.0.1:4280";
 const { FULL, PET, MARGIN } = require("./sizes.cjs");
 
-const PANEL_W = FULL.width; // 560
+let PANEL_W = FULL.width; // preferred width; config.panelWidth / left-edge drag
+const PANEL_MIN_W = 460;
+const PANEL_MAX_W = 1200;
 const PANEL_MAX_H = 574;
 const PANEL_MIN_H = 340;
 const PANEL_GAP = 6;
@@ -29,6 +31,7 @@ let panelOpen = false;
 let panelPending = null; // command queued until the panel page finishes loading
 let bubbleSize = { width: 0, height: 0 };
 let grab = null;
+let panelGrab = null;
 
 // The pet window is a fixed size; move it without ever resizing it.
 function place(bounds, { save = false, panel = false } = {}) {
@@ -167,10 +170,21 @@ const config = { ...readConfig() };
 config.facing = cliFacing || (config.facing === "left" ? "left" : "right");
 config.auras = config.auras !== false;
 config.sendWith = config.sendWith === "enter" ? "enter" : "ctrl-enter";
+const savedPanelWidth = Number(config.panelWidth);
+config.panelWidth = Number.isFinite(savedPanelWidth) && savedPanelWidth > 0
+  ? Math.max(PANEL_MIN_W, Math.min(PANEL_MAX_W, Math.round(savedPanelWidth)))
+  : FULL.width;
+PANEL_W = config.panelWidth;
 
 // ---- placement ----------------------------------------------------------
 function workArea(win) {
   return screen.getDisplayMatching(win.getBounds()).workArea;
+}
+
+// The preferred width may be wider than the display the pet is on; clamp the
+// window to the work area instead of letting it run off the left edge.
+function panelWidth(area) {
+  return Math.max(1, Math.min(PANEL_W, area.width - 2 * MARGIN));
 }
 
 // The bubbles hug the sprite's top-right corner. Their window is sized by the
@@ -218,10 +232,11 @@ function panelPlacement() {
     height = Math.max(220, Math.min(PANEL_MAX_H, Math.max(roomAbove, roomBelow)));
   }
 
-  const x = Math.max(area.x, Math.min(right - PANEL_W, area.x + area.width - PANEL_W));
+  const width = panelWidth(area);
+  const x = Math.max(area.x, Math.min(right - width, area.x + area.width - width));
   let y = below ? bottom + PANEL_GAP : top - height - PANEL_GAP;
   y = Math.max(area.y, Math.min(y, area.y + area.height - height));
-  return { x: Math.round(x), y: Math.round(y), width: PANEL_W, height: Math.round(height) };
+  return { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) };
 }
 
 // The new-chat popover is shorter than the panel; size the window to it instead
@@ -232,12 +247,13 @@ function miniPlacement(height) {
   const right = b.x + b.width;
   const top = b.y;
   const bottom = b.y + b.height;
+  const width = panelWidth(area);
   const h = Math.max(120, Math.min(PANEL_MAX_H, Math.round(height)));
-  const x = Math.max(area.x, Math.min(right - PANEL_W, area.x + area.width - PANEL_W));
+  const x = Math.max(area.x, Math.min(right - width, area.x + area.width - width));
   let y = top - h - PANEL_GAP;
   if (y < area.y) y = bottom + PANEL_GAP;
   y = Math.max(area.y, Math.min(y, area.y + area.height - h));
-  return { x: Math.round(x), y: Math.round(y), width: PANEL_W, height: h };
+  return { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: h };
 }
 
 function sendPanelCommand(cmd) {
@@ -268,6 +284,7 @@ function showPanel(cmd = {}) {
 function hidePanel() {
   if (!panelWin || panelWin.isDestroyed()) return;
   panelOpen = false;
+  panelGrab = null;
   if (panelWin.isVisible()) panelWin.hide();
   if (petWin && !petWin.isDestroyed()) petWin.webContents.send("cp:panel-state", { open: false });
   positionBubbles();
@@ -395,7 +412,7 @@ app.whenReady().then(() => {
   bubbleWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
   panelWin = new BrowserWindow({
-    width: PANEL_W,
+    width: panelWidth(screen.getPrimaryDisplay().workArea),
     height: PANEL_MAX_H,
     show: false,
     transparent: true,
@@ -447,6 +464,42 @@ app.whenReady().then(() => {
     if (!panelOpen || !panelWin || panelWin.isDestroyed()) return;
     if (info && info.full) panelWin.setBounds(panelPlacement(), false);
     else if (info && info.height) panelWin.setBounds(miniPlacement(info.height), false);
+  });
+  // Left-edge resize: the renderer reports global cursor X. The shell keeps the
+  // panel's right edge pinned and remembers the chosen width on release.
+  ipcMain.on("cp:panel-resize", (_e, info) => {
+    if (!panelOpen || !panelWin || panelWin.isDestroyed()) return;
+    if (info?.phase === "begin") {
+      const b = panelWin.getBounds();
+      panelGrab = { startX: info.x, right: b.x + b.width, y: b.y, height: b.height, width: b.width };
+      return;
+    }
+    if (!panelGrab) return;
+    if (info?.phase === "move") {
+      const area = workArea(panelWin);
+      const wanted = panelGrab.width + (panelGrab.startX - info.x);
+      let width = Math.max(PANEL_MIN_W, Math.min(PANEL_MAX_W, Math.round(wanted)));
+      width = Math.max(1, Math.min(width, area.width - 2 * MARGIN));
+      let x = panelGrab.right - width;
+      if (x < area.x) {
+        width = Math.max(1, panelGrab.right - area.x);
+        x = area.x;
+      }
+      if (x + width > area.x + area.width) width = Math.max(1, area.x + area.width - x);
+      panelWin.setBounds({
+        x: Math.round(x),
+        y: panelGrab.y,
+        width: Math.round(width),
+        height: panelGrab.height,
+      }, false);
+      return;
+    }
+    if (info?.phase === "end") {
+      PANEL_W = panelWin.getBounds().width;
+      config.panelWidth = PANEL_W;
+      saveConfig({ ...readConfig(), panelWidth: PANEL_W });
+      panelGrab = null;
+    }
   });
   ipcMain.on("cp:pet-menu", () => petMenu());
   ipcMain.on("cp:bubble-menu", (_e, info) => bubbleMenu(info));
