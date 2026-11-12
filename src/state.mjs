@@ -101,6 +101,7 @@ export class PetState {
         cost: 0,
         lastText: "",
         lastAssistantID: null,
+        planReady: false,
         createdAt: serverCreated || Date.now(),
         updatedAt: serverUpdated || Date.now(),
       };
@@ -112,7 +113,11 @@ export class PetState {
     if (serverCreated) rec.createdAt = Math.min(rec.createdAt || serverCreated, serverCreated);
     if (info.title) rec.title = info.title;
     if (info.directory) rec.directory = info.directory;
-    if (info.agent) rec.agent = info.agent;
+    if (info.agent) {
+      // Leaving the plan agent means the finished plan is no longer actionable.
+      if (rec.agent !== info.agent) rec.planReady = false;
+      rec.agent = info.agent;
+    }
     if (info.model) rec.model = info.model;
     if (info.tokens) rec.tokens = { input: info.tokens.input ?? 0, output: info.tokens.output ?? 0 };
     if (typeof info.cost === "number") rec.cost = info.cost;
@@ -155,16 +160,24 @@ export class PetState {
       rec.state = this.hasPending(rec.key) ? STATE.WAITING : STATE.RUNNING;
       rec.detail = null;
       rec.activity = null;
+      rec.planReady = false; // a new turn supersedes the finished plan
     } else if (type === "idle") {
       rec.busy = false;
       rec.state = this.hasPending(rec.key) ? STATE.WAITING : STATE.IDLE;
       rec.detail = null;
       rec.activity = null;
+      // A plan turn that reaches idle has a plan to review. Keeping the flag on
+      // the record (rather than deriving it in the face from idle+agent) means a
+      // bare /plan switch on an old chat does not look like a finished plan.
+      if (rec.state === STATE.IDLE && rec.agent === "plan" && prevState !== STATE.IDLE) {
+        rec.planReady = true;
+      }
     } else if (type === "retry") {
       rec.busy = false;
       rec.state = STATE.ERROR;
       rec.detail = status.action?.label ?? status.message ?? "retrying";
       rec.activity = null;
+      rec.planReady = false;
     }
     // A status poll re-sends an unchanged state; only real transitions should
     // move a session to the top of the idle list.
@@ -181,6 +194,7 @@ export class PetState {
     rec.state = STATE.ERROR;
     rec.detail = message ?? "error";
     rec.activity = null;
+    rec.planReady = false;
     rec.updatedAt = Date.now();
     this.touch();
   }
@@ -482,6 +496,7 @@ export class PetState {
         tokens: rec.tokens,
         cost: rec.cost,
         lastText: rec.lastText,
+        planReady: Boolean(rec.planReady),
         createdAt: created.get(rec.id) || rec.createdAt || 0,
         updatedAt: rec.updatedAt,
         pending: this.pendingFor(rec.key).map((p) => ({

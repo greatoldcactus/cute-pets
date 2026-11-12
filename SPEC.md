@@ -142,7 +142,7 @@ trace preview and clears it when the session becomes idle.
 - `POST /api/announce` — plugin discovery `{serverUrl, directory}`
 - `GET /` — web face
 
-Session object: `{server,id,title,slug,directory,dirName,agent,model:{id,providerID,variant},state,detail,activity,tokens,cost,lastText,createdAt,updatedAt,pending[],forms[]}`.
+Session object: `{server,id,title,slug,directory,dirName,agent,model:{id,providerID,variant},state,detail,activity,tokens,cost,lastText,planReady,createdAt,updatedAt,pending[],forms[]}`. `planReady` is true after a `plan`-agent turn reaches idle and is cleared when the session starts another turn, errors, or leaves the plan agent; it drives the chat's plan-ready hand-off strip.
 
 ## 6. Pet rendering
 
@@ -272,7 +272,9 @@ Wayland may still refuse programmatic positioning; the shell's XWayland mode is 
   the session inbox (waiting briefly right after a plan create/switch, because the
   reminder is admitted asynchronously) and sends that prompt with `delivery:"steer"` too,
   so both are delivered into the same turn. Queueing would make the model answer the
-  reminder alone first and only see the user's message after that turn.
+  reminder alone first and only see the user's message after that turn. The face's
+  plan-ready strip uses that same hand-off: switch the session to build, then prompt
+  `Implement the plan.`.
 - **Directories are server-side.** v2 servers host sessions at arbitrary locations on
   one server; v1 servers are bound to one cwd and need a spawned server per directory.
   `/cd` validates the path on the brain host (or maps a WSL POSIX path through
