@@ -46,6 +46,7 @@ border:1px solid var(--line);color:var(--dim);flex:none;margin-top:1px}
 .detail{flex:1}
 .dhead{padding:8px 11px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
 .dhead .t{font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+.dhead #dmeta{max-width:52%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dbody{flex:1;overflow:auto;padding:9px 11px;display:flex;flex-direction:column;gap:7px}
 .msg{position:relative;background:var(--card2);border-radius:9px;padding:6px 9px;font-size:11.5px;white-space:normal;overflow-wrap:anywhere}
 .msg.copyable{padding-right:50px}
@@ -158,7 +159,7 @@ font:inherit;font-size:11px;cursor:pointer}
 .perm{border:1px solid #4a3a1a;background:#241d0f;border-radius:9px;padding:7px 8px;font-size:11px}
 .perm b{color:var(--wait)}
 /* composer + palette */
-.composer{position:relative;display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--line)}
+.composer{position:relative;display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px;border-top:1px solid var(--line)}
 .composer textarea{flex:1;background:var(--card2);border:1px solid var(--line);border-radius:9px;color:var(--ink);
 font:inherit;font-size:12px;padding:7px 10px;min-width:0;min-height:84px;resize:none;line-height:1.45}
 .composer button{background:#24506b;border:1px solid #2f6d92;color:var(--ink);border-radius:9px;padding:6px 11px;
@@ -166,6 +167,12 @@ font:inherit;cursor:pointer;align-self:flex-end}
 .palette{position:absolute;left:8px;right:8px;bottom:calc(100% + 6px);background:#171a23;border:1px solid var(--line);
 border-radius:10px;box-shadow:0 -10px 26px rgba(0,0,0,.5);overflow:hidden;display:none;max-height:248px;overflow-y:auto}
 .palette.on{display:block}
+.queuestrip{flex-basis:100%;display:flex;flex-direction:column;gap:4px;max-height:100px;overflow-y:auto}
+.queuestrip:empty{display:none}
+.qrow{display:flex;gap:6px;align-items:center;background:#171d2a;border:1px solid var(--line);border-radius:8px;padding:4px 7px;font-size:11px}
+.qrow .qmode{flex:none;font-size:9.5px;color:#9fd2ff;text-transform:uppercase;letter-spacing:.4px}
+.qrow .qtext{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.qrow .pbtn{padding:2px 6px;font-size:10px;flex:none}
 .pitem{display:flex;gap:8px;padding:6px 10px;cursor:pointer;align-items:baseline}
 .pitem:hover,.pitem.sel{background:#222736}
 .pitem .n{font-family:ui-monospace,monospace;font-size:11.5px;color:#9fd2ff;flex:none}
@@ -207,6 +214,17 @@ cursor:pointer;box-shadow:0 6px 16px rgba(0,0,0,.45)}
 .bub.done span{color:#b9c2d6}
 .bub.waiting i{background:var(--wait)}.bub.running i{background:var(--run)}.bub.error i{background:var(--err)}
 .bub.plan i{background:var(--plan)}
+/* A pending question/approval must win over the plan colour: a plan-mode
+   question otherwise looked like ordinary planning work. */
+.bub.plan.waiting i{background:var(--wait)}
+.bub.plan.error i{background:var(--err)}
+.bub.waiting{border-color:#6d5420;background:rgba(36,29,15,.97)}
+.bub.waiting i{box-shadow:0 0 6px rgba(255,198,92,.85);animation:bpulse 1.4s ease-in-out infinite}
+.bub.plan.waiting span{color:#d9cffb}
+.bub .need{flex:none;font-size:8.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  color:#201a08;background:var(--wait);border-radius:5px;padding:1px 4px;line-height:1.45}
+@keyframes bpulse{50%{opacity:.3}}
+@media (prefers-reduced-motion:reduce){.bub.waiting i{animation:none}}
 .bub.done.plan{border-color:#3f3168;opacity:.95}
 .bub.done.plan span{color:#d9cffb}
 .bub span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -269,6 +287,7 @@ body.mode-panel .mini{left:0;right:0;top:0;bottom:auto;width:auto}
     </div>
     <form class="composer" id="composer">
       <div class="palette" id="palette"></div>
+      <div class="queuestrip" id="queued"></div>
       <textarea id="prompt" rows="5" placeholder="Message the selected session — / for commands · Ctrl+Enter to send" autocomplete="off"></textarea>
       <button type="submit">&#9166;</button>
     </form>
@@ -311,6 +330,7 @@ let finishedIds=[], prevStates=new Map(), firstRender=false;   // sessions that 
 let expanded=IS_PANEL, selected=null, view="chat", filter="all", commands=[], newDir=null, workspaces=[];
 let draft=null, defaults=null; // a new chat before its first message
 let composerDrafts=new Map(), composerKey=""; // unsent text per chat/draft
+let submitDelivery=null, queuedKey=""; // one-shot /queue from the keyboard · queue strip cache
 if(IS_PANEL) document.body.classList.add("expanded"); // the panel window only exists while open
 
 /* ---------------- sprite ---------------- */
@@ -371,8 +391,8 @@ function applyAuras(on){
 function updateComposerHint(){
   const el=$("#prompt"); if(!el) return;
   el.placeholder=sendWith==="enter"
-    ? "Message — Enter to send · Shift+Enter for a newline"
-    : "Message — / for commands · Ctrl+Enter to send";
+    ? "Message — Enter to send · Shift+Enter newline · /queue to wait for the turn"
+    : "Message — Ctrl+Enter to send · /queue to wait for the turn";
 }
 function applySendWith(mode){
   const next=mode==="enter"?"enter":"ctrl-enter";
@@ -392,6 +412,9 @@ async function post(path, body){
   const j=await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(j.error||r.status);
   return j;
+}
+async function refreshState(){
+  try{ state=await (await fetch("/api/state")).json(); render(); }catch{}
 }
 // Electron's main-process clipboard does not need the document to be focused;
 // the browser face falls back to the standard Clipboard API.
@@ -415,14 +438,19 @@ function setExpanded(on){
   document.body.classList.toggle("minimized",!on);
 }
 function showView(v){ view=v; if(v!=="chat") draft=null; render(); }
+// A new chat inherits the chat it is started from: its directory, model (with
+// the picked effort variant) and agent. With nothing selected it falls back to
+// the last-used defaults, then to the first known workspace.
 function startDraft(){
   const base=defaults||{};
+  const from=currentSession();
+  const model=from?.model || base.model || null;
   composerDrafts.delete("draft");
   draft={
-    directory: base.directory || workspaces[0]?.directory || null,
-    server: base.server || null,
-    model: base.model || null,
-    agent: base.agent || null,
+    directory: from?.directory || base.directory || workspaces[0]?.directory || null,
+    server: from?.server || base.server || null,
+    model: model?.id ? {id:model.id, providerID:model.providerID, variant:model.variant ?? "default"} : null,
+    agent: from?.agent || base.agent || null,
   };
   selected=null; msgSession=""; msgKey=""; msgSeq++;
   if(msgTimer) clearTimeout(msgTimer);
@@ -433,6 +461,21 @@ function startDraft(){
   setTimeout(()=>$("#prompt")?.focus(),30);
 }
 const currentSession=()=>state.sessions.find(s=>s.id===selected)||null;
+// `provider/model#variant` matches OpenCode's own model selector. `default` is
+// the absence of a variant, so it stays out of the label.
+function modelLabel(model){
+  if(!model?.id) return "default model";
+  const base=(model.providerID?model.providerID+"/":"")+model.id;
+  return model.variant&&model.variant!=="default" ? `${base}#${model.variant}` : base;
+}
+// Labels are ellipsized to keep the header compact. Give them a native
+// tooltip with the full value only when the text is actually clipped.
+function fitLabel(el, text){
+  if(!el) return;
+  el.textContent=text;
+  el.title=el.scrollWidth>el.clientWidth ? text : "";
+}
+function currentModel(){ return currentSession()?.model || draft?.model || defaults?.model || null; }
 function currentComposerKey(){
   const s=currentSession();
   return s?`session:${s.server}|${s.id}`:"draft";
@@ -455,16 +498,36 @@ function clearComposer(){
 }
 
 /* ---------------- rendering ---------------- */
+// The brain orders sessions itself: needs-you first, then creation time. That
+// order ignores last-update churn on purpose, because with several sessions
+// streaming the "most recent" session changes every few frames and would move
+// the button out from under the cursor.
+let bubbleSig=null;
+// What a waiting session is waiting FOR. The badge is the visible cue on the
+// pet; the tooltip names the form/permission itself.
+function needLabel(s){
+  if(s.state!=="waiting") return "";
+  if((s.forms||[]).length) return "answer";
+  if((s.pending||[]).length) return "approve";
+  return "needs you";
+}
 function renderBubbles(){
-  const act=state.sessions.filter(s=>s.state!=="idle")
-    .sort((a,b)=>(a.state==="waiting"?0:1)-(b.state==="waiting"?0:1)).slice(0,3);
+  const act=state.sessions.filter(s=>s.state!=="idle").slice(0,3);
   // Sessions that finished while the pet was running keep a bubble until they are
   // hidden (or fall out of the list of the last few).
   const shown=new Set(act.map(s=>s.id));
   const done=finishedIds.map(id=>state.sessions.find(s=>s.id===id))
-    .filter(s=>s&&!shown.has(s.id)).slice(0,2);
-  $("#bubbles").innerHTML=[...act.map(s=>`<button class="bub ${s.state}${s.agent==="plan"?" plan":""}" data-session="${esc(s.id)}">
-      <i></i><span>${esc(s.title)}</span></button>`),
+    .filter(s=>s&&!shown.has(s.id)).slice(-2);
+  // Streaming text changes state.sessions constantly, but nothing in this stack
+  // depends on it. Rebuilding identical markup would still replace the hovered
+  // button; the browser then retargets the click to the container and the click
+  // is lost.
+  const sig=JSON.stringify([act.map(s=>[s.id,s.state,s.agent||"",s.title,(s.forms||[]).length,(s.pending||[]).length]),
+    done.map(s=>[s.id,s.agent||"",s.title])]);
+  if(sig===bubbleSig) return;
+  bubbleSig=sig;
+  $("#bubbles").innerHTML=[...act.map(s=>{ const need=needLabel(s); return `<button class="bub ${s.state}${s.agent==="plan"?" plan":""}" data-session="${esc(s.id)}" aria-label="${esc(s.title)}${need?` — ${need}`:""}">
+      <i></i>${need?`<b class="need">${need}</b>`:""}<span>${esc(s.title)}</span></button>`; }),
     ...done.map(s=>`<button class="bub done${s.agent==="plan"?" plan":""}" data-session="${esc(s.id)}" title="finished - right-click to hide">
       <i></i><span>${s.agent==="plan"?"plan ready · ":"&#10003; "}${esc(s.title)}</span></button>`)].join("");
   syncBubbleSize();
@@ -480,6 +543,11 @@ function syncBubbleSize(){
   bubbleKey=key;
   api.bubblesSize({width:w,height:h});
 }
+// Snapshot-driven rendering reuses rows instead of rebuilding the list: the
+// brain pushes state ~8x/s while sessions stream, and replacing the row under
+// the cursor loses the click (the browser retargets it to the container).
+const listRows=new Map(); // session id -> {el, html, sel}
+let listOrder="";
 function renderList(){
   const dirs=[...new Set(state.sessions.map(s=>s.dirName).filter(Boolean))].sort();
   const sel=$("#filter");
@@ -490,17 +558,56 @@ function renderList(){
     sel.dataset.k=dirs.join("|");
   }
   const list=state.sessions.filter(s=>sel.value==="all"||s.dirName===sel.value);
-  $("#sessions").innerHTML=list.length?list.map(s=>`
-    <div class="srow ${s.id===selected?"sel":""}" data-session="${esc(s.id)}">
-      <span class="chip ${s.state}${s.agent==="plan"?" plan":""}">${s.agent==="plan"&&s.state==="running"?"plan":s.agent==="plan"&&s.state==="waiting"?"answer":s.state}</span>
+  const box=$("#sessions");
+  const wanted=new Set(list.map(s=>s.id));
+  for(const [id,row] of listRows) if(!wanted.has(id)){ row.el.remove(); listRows.delete(id); }
+  if(!list.length){
+    listOrder="";
+    if(!box.querySelector(".empty")) box.innerHTML=`<div class="empty">no sessions</div>`;
+    return;
+  }
+  box.querySelector(".empty")?.remove();
+  for(const s of list){
+    let row=listRows.get(s.id);
+    if(!row){
+      row={el:document.createElement("div"),html:"",sel:null};
+      row.el.className="srow";
+      row.el.dataset.session=s.id;
+      listRows.set(s.id,row);
+    }
+    if(row.sel!==(s.id===selected)){
+      row.sel=s.id===selected;
+      row.el.classList.toggle("sel",row.sel);
+    }
+    // Per-row rebuild: the row element itself survives, so a click that is in
+    // flight while streaming text updates still lands on a `[data-session]`.
+    const html=`<span class="chip ${s.state}${s.agent==="plan"?" plan":""}">${s.agent==="plan"&&s.state==="running"?"plan":s.agent==="plan"&&s.state==="waiting"?"answer":s.state}</span>
       <div style="min-width:0;flex:1">
-        <div class="stitle">${esc(s.title)}</div>
-        <div class="ssub">${esc(s.dirName||"")}${s.lastText?" · "+esc(s.lastText.slice(0,42)):""}</div>
-      </div>
-    </div>`).join(""):`<div class="empty">no sessions</div>`;
+        <div class="stitle" data-full="${esc(s.title)}">${esc(s.title)}</div>
+        <div class="ssub" data-full="${esc([s.dirName,s.lastText].filter(Boolean).join(" · "))}">${esc(s.dirName||"")}${s.lastText?" · "+esc(s.lastText.slice(0,42)):""}</div>
+      </div>`;
+    if(html!==row.html){
+      row.html=html;
+      row.el.innerHTML=html;
+      for(const el of row.el.querySelectorAll("[data-full]")) fitLabel(el,el.dataset.full);
+    }
+  }
+  // Reorder only when the order actually changed: moving a node needlessly also
+  // costs the hover state and the in-flight click.
+  const order=list.map(s=>s.id).join("|");
+  if(order!==listOrder){
+    listOrder=order;
+    for(const s of list) box.appendChild(listRows.get(s.id).el);
+  }
 }
+// Approvals are the last place a swallowed click should happen: rebuilding the
+// buttons on every streaming snapshot would do exactly that.
+let permSig=null;
 function renderPerms(){
   const perms=state.permissions||[];
+  const sig=JSON.stringify([perms.length,perms.slice(0,3).map(p=>[p.id,p.permission,p.patterns||[]])]);
+  if(sig===permSig) return;
+  permSig=sig;
   $("#permzone").innerHTML=perms.slice(0,3).map(p=>`<div class="perm">
       <b>Approval</b> · ${esc(p.permission)}
       ${(p.patterns||[]).length?`<div style="color:var(--dim);font-size:10px">${esc((p.patterns||[]).join(", "))}</div>`:""}
@@ -510,6 +617,31 @@ function renderPerms(){
         <button class="pbtn no" data-perm="${esc(p.id)}" data-reply="reject">reject</button>
       </div></div>`).join("")+(perms.length>3?`<div class="ssub" style="padding:4px 2px">+${perms.length-3} more</div>`:"");
 }
+// Undelivered messages live in OpenCode's durable inbox, not in the message
+// history. Show them above the composer so /queue does not look like a no-op.
+function renderQueued(){
+  const el=$("#queued"); if(!el) return;
+  const s=currentSession();
+  const rows=view==="chat"&&s&&Array.isArray(s.queued)?s.queued:[];
+  const key=JSON.stringify(rows.map(x=>[x.id,x.delivery,x.text]));
+  if(key===queuedKey) return;
+  queuedKey=key;
+  el.innerHTML=rows.map(x=>`<div class="qrow" title="${esc(x.text)}">
+      <span class="qmode">${x.delivery==="steer"?"steering":"queued"}</span>
+      <span class="qtext">${esc(x.text)||"(empty)"}</span>
+      ${x.delivery==="queue"?`<button class="pbtn" type="button" data-queue-steer="${esc(x.id)}" title="Steer into the running turn">send now</button>`:""}
+      <button class="pbtn" type="button" data-queue-cancel="${esc(x.id)}" title="Cancel queued message">&times;</button>
+    </div>`).join("");
+}
+// New/pets/settings (and the draft hint) are static for a state snapshot: rebuild
+// only when their markup really changed, so a settings toggle or a pet pick is not
+// swallowed by a rebuild that lands between mousedown and mouseup.
+function setBody(html){
+  const b=$("#dbody");
+  if(b.innerHTML===html) return;
+  b.innerHTML=html;
+  updateToBottom();
+}
 function renderDetail(){
   const s=currentSession();
   const d = view==="chat" && !s ? draft : null;
@@ -517,28 +649,29 @@ function renderDetail(){
   $("#dstate").className="chip "+(s?s.state:"idle")+(isPlan?" plan":"");
   $("#dstate").textContent=s?(isPlan&&s.state==="running"?"plan":isPlan&&s.state==="waiting"?"plan · answer":s.state)
     :d?(isPlan?"plan":"new"):"idle";
-  $("#dtitle").textContent = view==="new" ? "New chat"
+  const title = view==="new" ? "New chat"
     : view==="pets" ? "Pets" : view==="settings" ? "Settings"
     : d ? (isPlan?"New plan chat":"New chat") : s?s.title:"Nothing selected";
+  // The stop button changes the space available, so update it before measuring.
   $("#dabort").style.display = s&&s.state==="running" ? "" : "none";
+  fitLabel($("#dtitle"),title);
   const dirName = d?.directory ? d.directory.split(/[\\/]/).filter(Boolean).pop() : "";
-  $("#dmeta").textContent = s ? [s.model?.id, s.agent].filter(Boolean).join(" · ")
-    : d ? [dirName || "no folder", d.model?.id || "default model", d.agent].filter(Boolean).join(" · ") : "";
+  fitLabel($("#dmeta"), s ? [modelLabel(s.model), s.agent].filter(Boolean).join(" · ")
+    : d ? [dirName || "no folder", modelLabel(d.model), d.agent].filter(Boolean).join(" · ") : "");
   const body=$("#dbody");
   body.classList.toggle("plan",isPlan);
   if(view!=="chat"){ msgSession=""; msgKey=""; }
-  if(view==="new"){ body.innerHTML=newChatHtml(); updateToBottom(); return; }
-  if(view==="pets"){ body.innerHTML=petsHtml(); updateToBottom(); return; }
-  if(view==="settings"){ body.innerHTML=settingsHtml(); updateToBottom(); return; }
+  if(view==="new"){ setBody(newChatHtml()); return; }
+  if(view==="pets"){ setBody(petsHtml()); return; }
+  if(view==="settings"){ setBody(settingsHtml()); return; }
   if(d){
-    body.innerHTML=`<div class="empty" style="padding:26px 10px">${isPlan?"Plan mode":"New chat"}${
+    setBody(`<div class="empty" style="padding:26px 10px">${isPlan?"Plan mode":"New chat"}${
       d.directory?`<div class="ssub" style="margin-top:4px;overflow-wrap:anywhere">${esc(d.directory)}</div>`:""}
       ${isPlan?`<div class="ssub" style="margin-top:10px;color:var(--plan)">Read-only planning · /build to implement</div>`:""}
-      <div class="ssub" style="margin-top:10px">/cd to change directory · /model to pick a model</div></div>`;
-    updateToBottom();
+      <div class="ssub" style="margin-top:10px">/cd directory · /model model · /effort reasoning effort</div></div>`);
     return;
   }
-  if(!s){ msgSession=""; body.innerHTML=`<div class="empty">pick a session, or press + for a new chat</div>`; updateToBottom(); return; }
+  if(!s){ msgSession=""; setBody(`<div class="empty">pick a session, or press + for a new chat</div>`); return; }
   // Only show the placeholder when the session actually changed. Re-rendering the
   // same chat must not replace it with "loading…" and then early-return.
   const sk=sessionKey(s);
@@ -899,7 +1032,7 @@ function settingsHtml(){
         <button class="pbtn ${sendWith==="ctrl-enter"?"on":""}" data-send-with="ctrl-enter">Ctrl/Cmd+Enter</button>
         <button class="pbtn ${sendWith==="enter"?"on":""}" data-send-with="enter">Enter</button>
       </div>
-      <div class="ssub">${sendWith==="enter"?"Enter sends · Shift+Enter adds a newline":"Ctrl/Cmd+Enter sends · Enter adds a newline"}</div></div>
+      <div class="ssub">${sendWith==="enter"?"Enter sends · Shift+Enter adds a newline":"Ctrl/Cmd+Enter sends · Enter adds a newline"} · Ctrl/Cmd+Shift+Enter queues</div></div>
     <div class="field"><label>Config</label><div class="ssub" style="font-family:ui-monospace,monospace">~/.cute-pets/config.json</div></div>
     <div class="field"><label>Pets folder</label><div class="ssub" style="font-family:ui-monospace,monospace">~/.cute-pets/pets/</div></div>
     <div class="field"><label>Sessions</label><div class="ssub">${state.sessions.length} tracked across ${(state.servers||[]).filter(s=>s.online).length} servers</div></div>
@@ -1089,16 +1222,20 @@ function render(){
   const live=new Set(state.sessions.map(s=>s.id));
   for(const s of state.sessions){
     const was=prevStates.get(s.id);
+    // Append, so a bubble that is already on screen keeps its slot; `slice(-4)`
+    // drops the oldest history, and the stack shows the newest two of it.
     if(was && was!=="idle" && s.state==="idle")
-      finishedIds=[s.id,...finishedIds.filter(x=>x!==s.id)].slice(0,4);
+      finishedIds=[...finishedIds.filter(x=>x!==s.id),s.id].slice(-4);
     prevStates.set(s.id,s.state);
   }
   for(const k of [...prevStates.keys()]) if(!live.has(k)) prevStates.delete(k);
   if(!firstRender){
     firstRender=true;
+    // Seed with what finished shortly before the face started, oldest first so
+    // the newest sits at the bottom like a live finish would.
     const recent=state.sessions.filter(s=>s.state==="idle"&&s.lastText&&Date.now()-(s.updatedAt||0)<15*60*1000)
-      .sort((a,b)=>b.updatedAt-a.updatedAt).slice(0,2).map(s=>s.id);
-    finishedIds=[...new Set([...finishedIds,...recent])].slice(0,4);
+      .sort((a,b)=>b.updatedAt-a.updatedAt).slice(0,2).reverse().map(s=>s.id);
+    finishedIds=[...new Set([...finishedIds,...recent])].slice(-4);
   }
   finishedIds=finishedIds.filter(id=>live.has(id));
   const plan=Boolean(state.pet?.plan);
@@ -1113,7 +1250,7 @@ function render(){
     const c=state.pet?.counts||{};
     $("#psub").textContent=[plan?"planning":"",c.waiting?`${c.waiting} needs you`:"",c.running?`${c.running} working`:"",
       c.error?`${c.error} error`:"",`${c.idle||0} idle`].filter(Boolean).join(" · ")||"idle";
-    renderList(); renderPerms(); renderDetail(); renderForms(); syncComposer();
+    renderList(); renderPerms(); renderDetail(); renderForms(); renderQueued(); syncComposer();
     if(view==="pets") renderPetsList();
   }
   if(IS_BUBBLES) renderBubbles();
@@ -1130,6 +1267,31 @@ document.addEventListener("click",async e=>{
   if(perm){ try{ await post("/api/permission",{id:perm.dataset.perm,reply:perm.dataset.reply}); }catch(err){} return; }
   const send=e.target.closest("[data-form-send]");
   if(send){ await sendForm(send.dataset.formSend); return; }
+  const qcancel=e.target.closest("[data-queue-cancel]");
+  if(qcancel){
+    const s=currentSession(); if(!s) return;
+    const id=qcancel.dataset.queueCancel;
+    qcancel.disabled=true;
+    try{
+      await post("/api/inbox/cancel",{server:s.server,sessionId:s.id,inboxId:id});
+      s.queued=(s.queued||[]).filter(x=>x.id!==id);
+      render();
+    }catch{ await refreshState(); }
+    return;
+  }
+  const qsteer=e.target.closest("[data-queue-steer]");
+  if(qsteer){
+    const s=currentSession(); if(!s) return;
+    const id=qsteer.dataset.queueSteer;
+    qsteer.disabled=true;
+    try{
+      await post("/api/inbox/steer",{server:s.server,sessionId:s.id,inboxId:id});
+      const item=(s.queued||[]).find(x=>x.id===id);
+      if(item) item.delivery="steer";
+      render();
+    }catch{ await refreshState(); }
+    return;
+  }
   const row=e.target.closest("[data-session]");
   if(row){
     if(!IS_PANEL){ api.panel({open:true,sessionId:row.dataset.session}); return; }
@@ -1203,10 +1365,13 @@ const PET_CMDS=[
   {name:"new",      d:"start a blank chat",                 run:()=>{ startDraft(); }},
   {name:"sessions", d:"show the session list",              run:()=>{ draft=null; setExpanded(true); showView("chat"); }},
   {name:"cd",       d:"change the working directory",       run:()=>{ $("#prompt").value="/cd "; openDirPalette(); $("#prompt").focus(); }},
+  {name:"queue",    d:"send after the current turn finishes", run:()=>{ $("#prompt").value="/queue "; $("#prompt").focus(); }},
+  {name:"steer",    d:"send into the running turn now",      run:()=>{ $("#prompt").value="/steer "; $("#prompt").focus(); }},
   {name:"model",    d:"switch the model for this session",  pick:"model"},
+  {name:"effort",   d:"set reasoning effort for this model", pick:"effort"},
   {name:"agent",    d:"switch agent (build, plan, explore)",pick:"agent"},
-  {name:"plan",     d:"switch to plan mode (read-only)",    run:()=>useAgent("plan")},
-  {name:"build",    d:"switch back to the build agent",     run:()=>useAgent("build")},
+  {name:"plan",     d:"switch to plan (read-only); /plan <msg> sends it", run:()=>useAgent("plan"),  send:true},
+  {name:"build",    d:"switch back to build; /build <msg> also sends it",  run:()=>useAgent("build"), send:true},
   {name:"compact",  d:"summarize this conversation",        act:"compact"},
   {name:"undo",     d:"revert the last message",            act:"undo"},
   {name:"redo",     d:"restore reverted messages",          act:"redo"},
@@ -1217,7 +1382,7 @@ const PET_CMDS=[
   {name:"settings", d:"facing, config, paths",              run:()=>{ setExpanded(true); showView("settings"); }},
   {name:"help",     d:"list available commands",            run:()=>{ setExpanded(true); openPalette(""); }},
 ];
-let modelsList=[], agentsList=[], palMode="root", modelsKey="", agentsKey="";
+let modelsList=[], agentsList=[], effortItems=[], palMode="root", modelsKey="", agentsKey="";
 
 const pal=$("#palette"); let palSel=0, palItems=[];
 async function loadCommands(){
@@ -1250,8 +1415,37 @@ async function ensureAgents(){
   return agentsList;
 }
 
-// Directories already in use, for /cd: current/last first, then the sessions.
+// `default` is a real choice (reset to the provider default); the rest are the
+// model's catalog variants, which is where OpenCode keeps reasoning effort.
+async function openEffortPalette(){
+  const model=currentModel();
+  if(!model?.id){ alert("pick a model first (/model)"); return; }
+  await ensureModels();
+  const row=modelsList.find(m=>m.id===model.id&&m.providerID===model.providerID);
+  const variants=row?.variants||[];
+  if(!variants.length){ alert(`${modelLabel(model)} has no effort settings`); return; }
+  const active=model.variant||"default";
+  effortItems=[
+    {kind:"effort",label:"default",sub:"provider default"+(active==="default"?" · current":""),value:"default"},
+    ...variants.map(v=>({kind:"effort",label:v,sub:v===active?"current":"",value:v})),
+  ];
+  if(active!=="default"&&!variants.includes(active))
+    effortItems.push({kind:"effort",label:active,sub:"current",value:active});
+  openPalette("","efforts");
+  const idx=effortItems.findIndex(it=>it.value===active);
+  if(idx>0){
+    palSel=idx;
+    [...pal.children].forEach((el,i)=>el.classList.toggle("sel",i===palSel));
+  }
+}
+// A model switch keeps the current effort only when it is the same model.
+function modelValue(model){
+  const prev=currentModel();
+  const keep=prev&&prev.id===model.id&&prev.providerID===model.providerID;
+  return {id:model.id,providerID:model.providerID,variant:keep&&prev.variant?prev.variant:"default"};
+}
 function dirChoices(){
+  // Directories already in use, for /cd: current/last first, then the sessions.
   const seen=new Map();
   const add=(dir,why)=>{ if(dir&&!seen.has(dir)) seen.set(dir,{dir,why}); };
   add(draft?.directory,"current");
@@ -1284,6 +1478,8 @@ function openPalette(prefix="",mode="root"){
     palItems=modelsList.map(m=>({kind:"model",label:m.id,sub:`${m.providerID}${m.free?" · free":""}${m.default?" · default":""}`,value:m}));
   }else if(mode==="agents"){
     palItems=agentsList.map(a=>({kind:"agent",label:a.name,sub:a.description||a.mode||"",value:a.name}));
+  }else if(mode==="efforts"){
+    palItems=effortItems;
   }else{
     palItems=[
       ...commands.filter(c=>c.name.toLowerCase().startsWith(q))
@@ -1303,12 +1499,11 @@ async function choosePalette(i){
   const it=palItems[i]; if(!it) return;
   if(it.kind==="command"){ $("#prompt").value=it.label+" "; closePalette(); $("#prompt").focus(); return; }
   if(it.kind==="dir"){ closePalette(); $("#prompt").value=""; await changeDir(it.value); return; }
+  if(it.kind==="effort"){ closePalette(); $("#prompt").value=""; await setEffort(it.value); return; }
   if(it.kind==="model"||it.kind==="agent"){
     if(!currentSession()&&!draft) startDraft();
     const s=currentSession();
-    const value=it.kind==="model"
-      ? {id:it.value.id, providerID:it.value.providerID, variant:it.value.variant ?? "default"}
-      : it.value;
+    const value=it.kind==="model" ? modelValue(it.value) : it.value;
     if(!s && draft){
       if(it.kind==="model") draft.model=value; else draft.agent=value;
       closePalette(); $("#prompt").value=""; render(); return;
@@ -1322,6 +1517,7 @@ async function choosePalette(i){
   closePalette(); $("#prompt").value="";
   if(!cmd) return;
   if(cmd.pick==="model"){ await ensureModels(); openPalette("","models"); return; }
+  if(cmd.pick==="effort"){ await openEffortPalette(); return; }
   if(cmd.pick==="agent"){ await ensureAgents(); openPalette("","agents"); return; }
   if(cmd.run) return cmd.run();
   if(cmd.act) return runAction(cmd.act);
@@ -1350,6 +1546,8 @@ async function runAction(act){
 }
 
 // /plan and /build: set the agent on the selected session or the draft.
+// Returns false when the switch failed, so a trailing message is not sent to
+// the old agent.
 async function useAgent(name){
   const s=currentSession();
   if(!s){
@@ -1357,12 +1555,35 @@ async function useAgent(name){
     draft.agent=name;
     if(defaults) defaults.agent=name;
     render();
-    return;
+    return true;
   }
   try{
     await post("/api/session/action",{server:s.server,sessionId:s.id,action:"agent",value:name});
     if(defaults) defaults.agent=name;
     msgKey=""; render();
+    return true;
+  }catch(e){ alert(String(e)); return false; }
+}
+
+// /effort: set the model variant (reasoning effort) on the session or draft.
+async function setEffort(variant){
+  const next=variant||"default";
+  const s=currentSession();
+  if(!s){
+    if(!draft) startDraft();
+    if(!draft?.model?.id){ alert("pick a model first (/model)"); return; }
+    draft.model={...draft.model,variant:next};
+    if(defaults) defaults.model=draft.model;
+    render();
+    return;
+  }
+  if(!s.model?.id){ alert("this session has no model yet"); return; }
+  const value={id:s.model.id,providerID:s.model.providerID,variant:next};
+  try{
+    await post("/api/session/action",{server:s.server,sessionId:s.id,action:"model",value});
+    s.model={...s.model,...value};
+    if(defaults) defaults.model=value;
+    render();
   }catch(e){ alert(String(e)); }
 }
 
@@ -1421,8 +1642,8 @@ $("#prompt").addEventListener("input",e=>{
   }
   closePalette();
 });
-// Tab completes text into the composer; Enter is the action. A model/agent entry
-// has no text to complete, so Tab leaves the list alone there.
+// Tab completes text into the composer; Enter is the action. A model/effort/agent
+// entry has no text to complete, so Tab leaves the list alone there.
 function fillPaletteSelection(){
   const it=palItems[palSel]; if(!it) return false;
   if(it.kind==="command"||it.kind==="pet"){
@@ -1464,14 +1685,17 @@ $("#prompt").addEventListener("keydown",e=>{
   } else if(e.key==="Escape"){ closePalette(); }
 });
 // Enter inserts a newline by default; Ctrl/Cmd+Enter sends. In "Enter" mode
-// Enter sends and Shift+Enter inserts the newline.
+// Enter sends and Shift+Enter inserts the newline. Ctrl/Cmd+Shift+Enter queues
+// the message for the next turn in either mode.
 $("#prompt").addEventListener("keydown",e=>{
   if(e.key!=="Enter"||e.isComposing||e.defaultPrevented) return;
   const ctrl=e.ctrlKey||e.metaKey;
-  const send=sendWith==="enter" ? !e.shiftKey : ctrl;
+  const queue=ctrl&&e.shiftKey;
+  const send=queue || (sendWith==="enter" ? !e.shiftKey : ctrl);
   if(!send) return;
   e.preventDefault();
   closePalette();
+  submitDelivery=queue?"queue":null;
   $("#composer").requestSubmit();
 });
 pal.addEventListener("click",e=>{
@@ -1481,60 +1705,25 @@ pal.addEventListener("click",e=>{
   choosePalette(i);
 });
 
-$("#composer").addEventListener("submit",async e=>{
-  e.preventDefault();
-  const raw=$("#prompt").value.trim(); if(!raw) return;
-  const s=currentSession();
-  // the first message of a draft (or of the empty panel) creates the session at
-  // the draft's directory/model and sends in one go
-  const pending = () => draft || {
+// Where a new chat starts when nothing is selected: the open draft, or the
+// last used values.
+function draftDefaults(){
+  return draft || {
     directory: defaults?.directory || null,
     server: defaults?.server || null,
     model: defaults?.model || null,
     agent: defaults?.agent || null,
   };
+}
 
-  if(raw==="/cd"||raw.startsWith("/cd ")){
-    clearComposer();
-    closePalette();
-    await changeDir(raw.slice(3).trim());
-    return;
-  }
-
-  // a pet command typed in full runs locally (/model, /undo, …)
-  if(raw.startsWith("/")){
-    const [name,...rest]=raw.slice(1).split(" ");
-    const pet=PET_CMDS.find(c=>c.name===name);
-    if(pet){
-      clearComposer();
-      if(pet.pick==="model"){ if(!currentSession()&&!draft) startDraft(); await ensureModels(); openPalette("","models"); return; }
-      if(pet.pick==="agent"){ if(!currentSession()&&!draft) startDraft(); await ensureAgents(); openPalette("","agents"); return; }
-      if(pet.run) return pet.run();
-      if(pet.act) return runAction(pet.act);
-    }
-    if(!s){
-      const d=pending();
-      try{
-        const r=await post("/api/prompt",{newSession:true,server:d.server,directory:d.directory,model:d.model,agent:d.agent,
-          command:name,text:rest.join(" "),title:`/${name}`});
-        if(r.session) state.sessions=state.sessions.filter(x=>x.id!==r.session.id).concat(r.session);
-        clearComposer();
-        draft=null; selected=r.sessionId; msgKey=""; msgSession=""; view="chat"; render();
-      }catch(err){ alert(String(err)); }
-      return;
-    }
-    try{
-      await post("/api/prompt",{sessionId:s?s.id:null,server:s?s.server:null,newSession:!s,
-        command:name,text:rest.join(" "),title:`/${name}`});
-      clearComposer(); msgKey="";
-    }catch(err){ alert(String(err)); }
-    return;
-  }
-
+// Send a message to the selected session, or create one from the draft/last
+// used values. Shared by the composer and by `/plan <text>` / `/build <text>`.
+async function sendMessage(text, delivery=null){
+  const s=currentSession();
   if(!s){
-    const d=pending();
+    const d=draftDefaults();
     try{
-      const r=await post("/api/prompt",{newSession:true,text:raw,directory:d.directory,server:d.server,model:d.model,agent:d.agent});
+      const r=await post("/api/prompt",{newSession:true,text,directory:d.directory,server:d.server,model:d.model,agent:d.agent,delivery});
       if(r.session) state.sessions=state.sessions.filter(x=>x.id!==r.session.id).concat(r.session);
       clearComposer();
       draft=null; selected=r.sessionId; msgKey=""; msgSession=""; view="chat";
@@ -1548,12 +1737,82 @@ $("#composer").addEventListener("submit",async e=>{
     }catch(err){ alert(String(err)); }
     return;
   }
-
   try{
-    await post("/api/prompt",{sessionId:s?s.id:null,server:s?s.server:null,newSession:!s,text:raw});
+    await post("/api/prompt",{sessionId:s.id,server:s.server,newSession:false,text,delivery});
     clearComposer(); msgKey="";
-    if(s) setTimeout(()=>loadMessages(s),700);
+    setTimeout(()=>loadMessages(s),700);
   }catch(err){ alert(String(err)); }
+}
+
+$("#composer").addEventListener("submit",async e=>{
+  e.preventDefault();
+  let raw=$("#prompt").value.trim();
+  let delivery=submitDelivery; submitDelivery=null;
+  if(!raw) return;
+  // `/queue <text>` waits for the running turn; `/steer <text>` forces a steer.
+  // The rest is literal text, so `/queue /model` is a message, not a command.
+  let literal=false;
+  const q=raw.match(/^\/(queue|steer)(?:\s+([\s\S]*))?$/);
+  if(q){
+    const text=(q[2]||"").trim();
+    if(!text) return; // keep "/queue " in the composer so the user can type
+    delivery=q[1];
+    raw=text;
+    literal=true;
+  }
+  const s=currentSession();
+
+  if(!literal&&(raw==="/cd"||raw.startsWith("/cd "))){
+    clearComposer();
+    closePalette();
+    await changeDir(raw.slice(3).trim());
+    return;
+  }
+
+  // a pet command typed in full runs locally (/model, /undo, …)
+  if(!literal&&raw.startsWith("/")){
+    const body=raw.slice(1);
+    const m=body.match(/^(\S+)(?:\s+([\s\S]*))?$/);
+    const name=m?.[1]??"";
+    const restText=(m?.[2]??"").trim();
+    const pet=PET_CMDS.find(c=>c.name===name);
+    if(pet){
+      // /plan <text> and /build <text>: switch first, then send the rest as the
+      // next message so the switch and the prompt are one user action.
+      if(pet.send && pet.run){
+        const ok=await pet.run();
+        if(ok===false) return; // keep the line so it can be retried
+        if(restText) await sendMessage(restText, delivery);
+        else clearComposer();
+        return;
+      }
+      clearComposer();
+      if(pet.pick==="model"){ if(!currentSession()&&!draft) startDraft(); await ensureModels(); openPalette("","models"); return; }
+      if(pet.pick==="effort"){ if(!currentSession()&&!draft) startDraft(); await openEffortPalette(); return; }
+      if(pet.pick==="agent"){ if(!currentSession()&&!draft) startDraft(); await ensureAgents(); openPalette("","agents"); return; }
+      if(pet.run) return pet.run();
+      if(pet.act) return runAction(pet.act);
+    }
+    if(!s){
+      const d=draftDefaults();
+      try{
+        const r=await post("/api/prompt",{newSession:true,server:d.server,directory:d.directory,model:d.model,agent:d.agent,
+          command:name,text:restText,title:`/${name}`});
+        if(r.session) state.sessions=state.sessions.filter(x=>x.id!==r.session.id).concat(r.session);
+        clearComposer();
+        draft=null; selected=r.sessionId; msgKey=""; msgSession=""; view="chat"; render();
+      }catch(err){ alert(String(err)); }
+      return;
+    }
+    try{
+      await post("/api/prompt",{sessionId:s.id,server:s.server,newSession:false,
+        command:name,text:restText,title:`/${name}`});
+      clearComposer(); msgKey="";
+    }catch(err){ alert(String(err)); }
+    return;
+  }
+
+  await sendMessage(raw, delivery);
 });
 
 /* ---------------- pet: drag, click, context menu ---------------- */
@@ -1671,7 +1930,24 @@ document.addEventListener("click",async e=>{
 const tip=$("#tip");
 function tipHtml(s){
   const txt=(s.lastText||"").trim();
-  return `<b>${esc(s.title)}</b><div style="color:var(--dim);margin-top:3px">${esc(s.dirName||"")} · ${esc(s.state)}</div>`
+  const form=(s.forms||[])[0];
+  const perm=(s.pending||[])[0];
+  const field=form?.fields?.find(f=>!f.hidden&&(f.title||f.description));
+  // Say what the session is waiting for, not just the internal state name.
+  const need=s.state==="waiting"
+    ? (form?"needs your answer":perm?"needs your approval":"needs you")
+    : s.state;
+  const meta=[s.dirName,s.agent==="plan"?"plan":null,need].filter(Boolean).join(" · ");
+  const ask=form
+    ? `<div style="margin-top:5px;color:var(--wait)"><b>${esc(form.title||"Question")}</b>${
+        field?.title?` · ${esc(field.title)}`:""}</div>${
+        field?.description?`<div style="margin-top:3px">${esc(String(field.description).slice(0,160))}${
+          String(field.description).length>160?"…":""}</div>`:""}`
+    : perm
+      ? `<div style="margin-top:5px;color:var(--wait)"><b>Approval</b> · ${esc(perm.permission||"")}</div>`
+      : "";
+  return `<b>${esc(s.title)}</b><div style="color:var(--dim);margin-top:3px">${esc(meta)}</div>`
+    + ask
     + (txt?`<div style="margin-top:5px">${esc(txt.slice(0,160))}${txt.length>160?"…":""}</div>`:"");
 }
 document.addEventListener("mouseover",e=>{

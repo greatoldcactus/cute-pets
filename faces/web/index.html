@@ -148,6 +148,10 @@ const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",
 const short=n=>n>=1000?(n/1000).toFixed(1)+"k":String(n||0);
 let state={pet:{state:"idle",label:""},sessions:[],permissions:[],servers:[]};
 let open=null, lastMsgKey="";
+// Cards are reused across snapshots (same reason as the bubble stack): replacing
+// the node between mousedown and mouseup swallows the click.
+const sessionRows=new Map(); // session id -> {el, html, sel}
+let sessionOrder="";
 
 /* ---------- pet sprite (active pack, served by the brain) ---------- */
 const FW=192,FH=208,FRAMES=8;
@@ -229,11 +233,27 @@ function render(){
   const f=sel.value||"all";
   const list=f==="all"?all:all.filter(s=>s.dirName===f);
   $("#empty").style.display=list.length?"none":"";
-  $("#sessions").innerHTML=list.map(s=>{
+  const box=$("#sessions");
+  const wanted=new Set(list.map(s=>s.id));
+  for(const [id,row] of sessionRows) if(!wanted.has(id)){ row.el.remove(); sessionRows.delete(id); }
+  for(const s of list){
+    let row=sessionRows.get(s.id);
+    if(!row){
+      row={el:document.createElement("section"),html:"",sel:null};
+      row.el.className="card";
+      row.el.dataset.open=s.id;
+      row.el.dataset.server=s.server;
+      sessionRows.set(s.id,row);
+    }
+    if(row.sel!==Boolean(open&&open.id===s.id)){
+      row.sel=Boolean(open&&open.id===s.id);
+      row.el.classList.toggle("sel",row.sel);
+    }
     const tok=(s.tokens?.input||0)+(s.tokens?.output||0);
     const busy=s.state==="running";
-    return `<section class="card ${open&&open.id===s.id?"sel":""}" data-open="${esc(s.id)}" data-server="${esc(s.server)}">
-      <div class="row">
+    // Only the card's contents change; the section itself survives, so a click
+    // that lands while the snippet is streaming still reaches the card.
+    const html=`<div class="row">
         <span class="chip ${s.state}">${s.state}</span>
         <span class="title">${esc(s.title)}</span>
         <span class="meta">${esc(s.dirName||"")}${s.agent?" · "+esc(s.agent):""}</span>
@@ -241,9 +261,14 @@ function render(){
       </div>
       ${s.detail?`<div class="meta" style="color:var(--err)">${esc(s.detail)}</div>`:""}
       ${s.lastText?`<div class="snippet">${esc(s.lastText)}</div>`:""}
-      ${busy?`<div class="bar"><i style="width:${Math.min(95,30+((Date.now()/90)%60))}%"></i></div>`:""}
-    </section>`;
-  }).join("");
+      ${busy?`<div class="bar"><i style="width:${Math.min(95,30+((Date.now()/90)%60))}%"></i></div>`:""}`;
+    if(html!==row.html){ row.html=html; row.el.innerHTML=html; }
+  }
+  const order=list.map(s=>s.id).join("|");
+  if(order!==sessionOrder){
+    sessionOrder=order;
+    for(const s of list) box.appendChild(sessionRows.get(s.id).el);
+  }
 }
 
 /* ---------- actions ---------- */

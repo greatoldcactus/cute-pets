@@ -73,8 +73,11 @@ Two traps found the hard way:
 
 Per session: `running` (busy), `waiting` (approval, agent form/question, or plan answer
 pending), `error` (retry / session.error), `idle`. Priority for the pet and for list
-order: `waiting > error > running > idle`. Within a priority, sessions are sorted by
-`updatedAt` (newest first). `updatedAt` uses the server's `session.time.updated` and local
+order: `waiting > error > running > idle`. Within a priority, active sessions are sorted by
+creation time (`createdAt`, oldest first) and idle sessions by `updatedAt` (newest first).
+Active sessions deliberately ignore last-update recency: several sessions streaming at once
+would otherwise reshuffle the list and the bubble stack every few frames, moving buttons out
+from under the cursor. `updatedAt` uses the server's `session.time.updated` and local
 message/activity events; periodic syncs do not refresh it, so idle order stays stable and
 reflects the last real update.
 
@@ -86,7 +89,7 @@ reflects the last real update.
 | `session.error` | error |
 | `permission.asked` / `permission.replied` | refetch `GET /permission`, recompute waiting |
 | `form.created` (v2) | add the pending form, recompute waiting |
-| `form.replied` / `form.cancelled` (v2) | drop the form, recompute waiting |
+| `form.replied` / `form.cancelled` (v2) | drop the form, recompute waiting (back to `running` if the turn is still busy) |
 | `message.part.updated` (text) | `lastText` tail |
 | `message.part.delta` | append to `lastText` |
 | `session.deleted` | remove the session immediately |
@@ -96,8 +99,9 @@ reflects the last real update.
 removed, which also cleans up deleted sessions whose event was missed.
 
 Pet rollup: `waiting` if any session waits, else `error`, else `running`, else `idle`;
-label like "2 need you" / "1 failed" / "3 working" / "all done". If the driving session
-uses the `plan` agent and is not idle, the snapshot's `pet.plan` is true and the kind is
+label like "2 need you" / "1 failed" / "3 working" / "all done". The driving session is the
+first in list order, except that a plan session wins within the same priority. If it uses
+the `plan` agent and is not idle, the snapshot's `pet.plan` is true and the kind is
 `planning`.
 
 Message errors are rendered as fatal (red) only when the turn did not continue: if any
@@ -115,9 +119,10 @@ trace preview and clears it when the session becomes idle.
 
 - `GET /api/state` — snapshot `{generatedAt, pet, servers[], sessions[], permissions[], forms[]}`
 - `GET /api/events` — SSE, `event: state` with the same snapshot on every change (~120 ms debounce)
-- `POST /api/prompt` — `{text, sessionId?|server?, newSession?, title?, directory?, model?, agent?}`
+- `POST /api/prompt` — `{text, sessionId?|server?, newSession?, title?, directory?, model?, agent?, delivery?}`
   → `{server, sessionId, session}`; v2 creates the session with a `location`
-- `GET /api/defaults` — `{directory, server, model, agent}` (last used / server default)
+- `GET /api/defaults` — `{directory, server, model, agent}`: the fallback for a blank
+  chat when no session is selected (last used values / server default)
 - `POST /api/checkdir` — `{directory, server?}` → `{ok, directory, server, wsl}`;
   validates on the brain host or its WSL UNC mount
 - `POST /api/abort` — `{server, sessionId}`
@@ -137,7 +142,7 @@ trace preview and clears it when the session becomes idle.
 - `POST /api/announce` — plugin discovery `{serverUrl, directory}`
 - `GET /` — web face
 
-Session object: `{server,id,title,slug,directory,dirName,agent,model,state,detail,activity,tokens,cost,lastText,updatedAt,pending[],forms[]}`.
+Session object: `{server,id,title,slug,directory,dirName,agent,model:{id,providerID,variant},state,detail,activity,tokens,cost,lastText,createdAt,updatedAt,pending[],forms[]}`.
 
 ## 6. Pet rendering
 
@@ -149,14 +154,15 @@ base frames 192×208, OpenPets-style activity strips (`activities/<id>.webp`, 4�
 | --- | --- |
 | idle | idle loop |
 | running | working loop (thinking/editing variants from tool events later) |
-| waiting | attention pose + badge, speech bubble with the permission/form name |
+| waiting | attention pose + badge; bubble with an `answer`/`approve` badge, amber pulsing dot and the permission/form named in its tooltip |
 | error | error pose, stays until acknowledged |
 | plan | review pose (row 8) with a violet aura |
 
 Each state has a coloured aura: idle green (`#6ee7a8`), running blue (`#5ac8ff`),
 waiting amber (`#ffc65c`), error red (`#ff6b6b`), plan violet (`#a78bfa`). Plan mode keeps
-the waiting/error pose when it needs attention, but uses the violet aura. The whole aura
-layer is gated by the shell config `auras` (Settings → Auras).
+the waiting/error pose when it needs attention, but uses the violet aura; its bubble still
+shows the amber waiting badge/dot. The whole aura layer is gated by the shell config
+`auras` (Settings → Auras).
 
 Codex V2 sheets use `0 idle, 1 running-right, 2 running-left, 3 waving, 4 jumping,
 5 failed, 6 waiting, 7 running, 8 review, 9–10 look directions`. The face uses
@@ -206,9 +212,9 @@ AppImage first, deb/rpm later, no Flatpak in v1.
 | key | values | meaning |
 | --- | --- | --- |
 | `facing` | `"right"` (default) \| `"left"` | which way the sprite is drawn; `left` is a horizontal mirror |
-| `lastDirectory` | absolute path | last directory a chat was created in / moved to; the blank chat starts here |
-| `lastModel` | `{id,providerID,variant}` | last model picked with `/model` (also used for the next blank chat) |
-| `lastAgent` | string | last agent picked with `/agent` |
+| `lastDirectory` | absolute path | last directory a chat was created in / moved to; fallback for a blank chat when no session is selected |
+| `lastModel` | `{id,providerID,variant}` | last model or effort picked with `/model` / `/effort`; fallback for a blank chat |
+| `lastAgent` | string | last agent picked with `/agent`; fallback for a blank chat |
 | `auras` | boolean (default `true`) | coloured glow around the pet for idle/running/waiting/error/plan |
 | `sendWith` | `"ctrl-enter"` (default) \| `"enter"` | whether Ctrl/Cmd+Enter or Enter sends; in Enter mode Shift+Enter adds a newline |
 | `petPosition` | `{x,y}` | last pet window position in screen coordinates; restored if it still overlaps a display |
@@ -238,11 +244,14 @@ Wayland may still refuse programmatic positioning; the shell's XWayland mode is 
   `/global/health` then `/api/info`. Differences handled there: HTTP Basic auth
   (`opencode:<password>`), `/api/*` prefix, `{data}` envelope, `location.directory`,
   `content[]` instead of `parts[]` (user text is `m.text`), newest-first message order,
-  `delivery:"queue"` for prompts, `interrupt` instead of `abort`, `{action,resources}`
-  permission replies, and event translation
+  `delivery:"steer"` for follow-ups while a turn is running and `delivery:"queue"` for
+  `/queue`, `interrupt` instead of `abort`, `{action,resources}` permission replies, and
+  event translation
   (`session.execution.*`/`session.text.*` → v1 names, plus `session.deleted`,
-  `session.reasoning.*` and `session.tool.*` for the live activity preview). Fork is
-  implemented
+  `session.reasoning.*` and `session.tool.*` for the live activity preview). The durable
+  inbox (`GET /api/session/{id}/inbox`, `PATCH`/`DELETE .../{inboxID}`) backs the queue
+  strip; the brain tracks inbox items from `session.inbox.*` events and hydrates active
+  sessions on attach. Fork is implemented
   (`POST /api/session/{id}/fork`; `session.forked` carries no info, so the client fetches
   the new session to pick up its `(fork #N)` title). Model/agent switch
   (`/api/session/{id}/model`, `/agent`), session move (`/api/session/{id}/move`) and
@@ -255,12 +264,14 @@ Wayland may still refuse programmatic positioning; the shell's XWayland mode is 
   `multiselect` and `external`; the answer is `{key: value}` and an external field must be
   acknowledged with `true`. The brain fetches forms per session directory, turns a
   pending form into `waiting`, and exposes the answer route as `POST /api/form`.
-- **Plan mode uses a synthetic turn.** Creating a session with the `plan` agent (or
-  switching to it) enqueues a `synthetic` message with `delivery:"steer"` containing the
-  Plan-mode reminder, and that starts an execution immediately. The brain checks the
-  session inbox; when that reminder is still pending (or the session is already running)
-  it sends the first user prompt with `delivery:"steer"` too, so both are delivered into
-  the same turn. Queueing would make the model answer the reminder alone first.
+- **Plan mode uses a synthetic reminder.** Creating a session with the `plan` agent (or
+  switching to or from it) enqueues a `synthetic` message with `delivery:"steer"` and
+  `resume:false` containing the Plan-mode reminder. It does not start a turn by itself:
+  the next prompt wakes the session and the reminder is delivered first. The brain checks
+  the session inbox (waiting briefly right after a plan create/switch, because the
+  reminder is admitted asynchronously) and sends that prompt with `delivery:"steer"` too,
+  so both are delivered into the same turn. Queueing would make the model answer the
+  reminder alone first and only see the user's message after that turn.
 - **Directories are server-side.** v2 servers host sessions at arbitrary locations on
   one server; v1 servers are bound to one cwd and need a spawned server per directory.
   `/cd` validates the path on the brain host (or maps a WSL POSIX path through

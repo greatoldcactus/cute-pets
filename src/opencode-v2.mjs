@@ -7,7 +7,9 @@
 //  - responses are wrapped in { data } (some also carry { location })
 //  - sessions: directory lives in location.directory
 //  - messages: parts are called content[]; role comes from type
-//  - prompts default to delivery "steer" (dropped if no turn runs) — we send "queue"
+//  - the server default for prompts is "steer"; this client sends "queue" by
+//    default, and the brain asks for "steer" while a turn is running or a
+//    synthetic mode reminder is still pending
 //  - permissions reply with { action, resources }, not { reply }
 
 const enc = encodeURIComponent;
@@ -128,12 +130,30 @@ export class OpenCodeV2Client {
     });
   }
 
-  // Durable inputs waiting to be delivered. Switching to the plan agent enqueues
-  // a synthetic "you are in Plan mode" steer message; seeing it lets the brain
-  // join the first prompt to that same turn instead of queueing an empty one.
+  // Durable inputs waiting to be delivered. A plan session is created with, or
+  // switched to/from, the plan agent: the plan plugin then enqueues a synthetic
+  // mode reminder with delivery "steer" and resume:false. Seeing it lets the
+  // brain join its turn with the first prompt instead of queueing behind it.
   async inbox(sessionId) {
     const out = await this.#req(`/api/session/${enc(sessionId)}/inbox`);
     return out?.data ?? [];
+  }
+
+  // Cancel an input that has not been delivered yet. OpenCode treats a missing
+  // (already delivered) item as a no-op, so callers can always prune locally.
+  cancelInbox(sessionId, inboxId) {
+    return this.#req(`/api/session/${enc(sessionId)}/inbox/${enc(inboxId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  // Promote a queued input to "steer" so the running turn picks it up at its
+  // next step boundary instead of waiting for the turn to finish.
+  setInboxDelivery(sessionId, inboxId, delivery) {
+    return this.#req(`/api/session/${enc(sessionId)}/inbox/${enc(inboxId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ delivery }),
+    });
   }
 
   // Fetch one page of messages. v2 pages with an opaque cursor; pages are
@@ -248,7 +268,8 @@ export class OpenCodeV2Client {
     });
   }
 
-  // v2 prompts are queued; "steer" (the default) is dropped when no turn is running.
+  // v2 prompts are durable inbox items: "queue" waits for the next turn, while
+  // "steer" joins a turn that is starting or already running.
   prompt(id, text, extra = {}) {
     return this.#req(`/api/session/${enc(id)}/prompt`, {
       method: "POST",
@@ -295,6 +316,7 @@ export class OpenCodeV2Client {
       name: m.name ?? m.modelID ?? m.id,
       free: /free/i.test(m.modelID ?? m.id ?? ""),
       default: Boolean(m.default),
+      variants: (m.variants ?? []).map((v) => v.id).filter(Boolean),
     }));
     const grouped = {};
     for (const row of rows) grouped[row.providerID] = grouped[row.providerID] ?? row.id;
@@ -438,6 +460,26 @@ export class OpenCodeV2Client {
         case "form.replied":
         case "form.cancelled":
           return onEvent({ type: wrapper.type, properties: { id: d.id, sessionID: d.sessionID } });
+        // Durable queue items. The brain keeps these out of the message history
+        // until OpenCode delivers them, and the face shows a queue strip.
+        case "session.inbox.enqueued":
+          return onEvent({
+            type: "session.inbox.enqueued",
+            properties: {
+              sessionID: sid,
+              inboxID: d.inboxID,
+              item: d.item ?? {},
+              created: wrapper.created ?? Date.now(),
+            },
+          });
+        case "session.inbox.delivered":
+        case "session.inbox.cancelled":
+          return onEvent({ type: wrapper.type, properties: { sessionID: sid, inboxID: d.inboxID } });
+        case "session.inbox.delivery.changed":
+          return onEvent({
+            type: "session.inbox.delivery.changed",
+            properties: { sessionID: sid, inboxID: d.inboxID, delivery: d.delivery },
+          });
         default:
           return undefined;
       }
@@ -460,7 +502,7 @@ export class OpenCodeV2Client {
         let ev;
         try { ev = JSON.parse(payload); } catch { continue; }
         this.lastEventAt = Date.now();
-        emit({ type: ev.type, data: ev.data ?? {}, location: ev.location });
+        emit({ type: ev.type, data: ev.data ?? {}, location: ev.location, created: ev.created, id: ev.id });
       }
     }
   }

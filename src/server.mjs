@@ -214,6 +214,27 @@ export function startServer({ port, host, store, api }) {
           directory: body.directory ?? null,
           model: body.model ?? null,
           agent: body.agent ?? null,
+          delivery: body.delivery === "queue" || body.delivery === "steer" ? body.delivery : null,
+        });
+        return json(res, 200, out);
+      }
+
+      if (route === "POST /api/inbox/cancel") {
+        const body = await readBody(req);
+        const out = await api.cancelInbox({
+          server: body.server ?? null,
+          sessionId: body.sessionId ?? null,
+          inboxId: body.inboxId ?? null,
+        });
+        return json(res, 200, out);
+      }
+
+      if (route === "POST /api/inbox/steer") {
+        const body = await readBody(req);
+        const out = await api.steerInbox({
+          server: body.server ?? null,
+          sessionId: body.sessionId ?? null,
+          inboxId: body.inboxId ?? null,
         });
         return json(res, 200, out);
       }
