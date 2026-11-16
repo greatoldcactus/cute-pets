@@ -729,6 +729,11 @@ const currentSession=()=>state.sessions.find(s=>s.id===selected)||null;
 // clears planReady when the session starts another turn, errors, or leaves the
 // plan agent, so this is a pending decision rather than finished history.
 const isPlanReady=s=>Boolean(s&&s.planReady&&s.state==="idle"&&s.agent==="plan");
+// One label for every chip: a finished plan is "ready", even though the
+// underlying session state is idle.
+const stateLabel=s=>!s?"idle":isPlanReady(s)?"ready"
+  :s.agent==="plan"&&s.state==="running"?"plan"
+  :s.agent==="plan"&&s.state==="waiting"?"answer":s.state;
 // `provider/model#variant` matches OpenCode's own model selector. `default` is
 // the absence of a variant, so it stays out of the label.
 function modelLabel(model){
@@ -876,9 +881,7 @@ function renderActivity(){
   pop.innerHTML=rows.length
     ? `<div class="acthead">needs attention</div>`+rows.map(s=>{
         const plan=s.agent==="plan";
-        const label=s.state==="running"&&plan?"plan"
-          :s.state==="waiting"&&plan?"answer"
-          :isPlanReady(s)?"ready":s.state;
+        const label=stateLabel(s);
         return `<button type="button" class="actrow${s.id===selected?" sel":""}" data-session="${esc(s.id)}" title="${esc(s.title||"(untitled)")}">
           <span class="chip ${esc(s.state)}${plan&&s.state!=="waiting"?" plan":""}">${esc(label)}</span>
           <span class="amain"><span class="atitle">${esc(s.title||"(untitled)")}</span>
@@ -938,7 +941,7 @@ function renderList(){
     // Per-row rebuild: the row element itself survives, so a click that is in
     // flight while streaming text updates still lands on a `[data-session]`.
     const sub=[s.petHidden?"hidden from pet":null,s.dirName,s.lastText].filter(Boolean).join(" · ");
-    const html=`<span class="chip ${s.state}${s.agent==="plan"?" plan":""}">${s.agent==="plan"&&s.state==="running"?"plan":s.agent==="plan"&&s.state==="waiting"?"answer":s.state}</span>
+    const html=`<span class="chip ${s.state}${s.agent==="plan"?" plan":""}">${esc(stateLabel(s))}</span>
       <div style="min-width:0;flex:1">
         <div class="stitle" data-full="${esc(s.title)}">${esc(s.title)}</div>
         <div class="ssub" data-full="${esc(sub)}">${esc(sub)}</div>
@@ -1058,7 +1061,7 @@ function renderDetail(){
   const d = view==="chat" && !s ? draft : null;
   const isPlan=Boolean((s&&s.agent==="plan")||(d&&d.agent==="plan"));
   $("#dstate").className="chip "+(s?s.state:"idle")+(isPlan?" plan":"");
-  $("#dstate").textContent=s?(isPlan&&s.state==="running"?"plan":isPlan&&s.state==="waiting"?"plan · answer":s.state)
+  $("#dstate").textContent=s?stateLabel(s)
     :d?(isPlan?"plan":"new"):"idle";
   const title = view==="new" ? "New chat"
     : view==="pets" ? "Pets" : view==="settings" ? "Settings"
