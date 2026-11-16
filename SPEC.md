@@ -74,12 +74,15 @@ Two traps found the hard way:
 Per session: `running` (busy), `waiting` (approval, agent form/question, or plan answer
 pending), `error` (retry / session.error), `idle`. Priority for the pet and for list
 order: `waiting > error > running > idle`. Within a priority, active sessions are sorted by
-creation time (`createdAt`, oldest first) and idle sessions by `updatedAt` (newest first).
-Active sessions deliberately ignore last-update recency: several sessions streaming at once
-would otherwise reshuffle the list and the bubble stack every few frames, moving buttons out
-from under the cursor. `updatedAt` uses the server's `session.time.updated` and local
-message/activity events; periodic syncs do not refresh it, so idle order stays stable and
-reflects the last real update.
+the last user request (`lastPromptAt`, newest first; creation time when unseen), and idle
+sessions by `updatedAt` (newest first). Active sessions deliberately ignore per-token
+activity: several sessions streaming at once would otherwise reshuffle the list and the
+bubble stack every few frames, moving buttons out from under the cursor. `lastPromptAt` is
+in-memory and resets on restart; active sessions then fall back to creation time until
+their next prompt. `updatedAt` means the last meaningful change: a turn ending, a prompt,
+assistant text/activity, or a user edit such as a rename or staged revert. Token/cost
+updates and unchanged periodic syncs do not move it, and v2's `session.time.idle` seeds it
+on attach, so idle order stays stable and reflects when the work really ended.
 
 | Input | Effect |
 | --- | --- |
@@ -99,10 +102,16 @@ reflects the last real update.
 removed, which also cleans up deleted sessions whose event was missed.
 
 Pet rollup: `waiting` if any session waits, else `error`, else `running`, else `idle`;
-label like "2 need you" / "1 failed" / "3 working" / "all done". The driving session is the
+label like "2 need you" / "1 failed" / "3 working" / "all done" / "all hidden". Only
+sessions with `petHidden:false` participate; hidden sessions remain in `sessions[]` for the
+panel's visibility filter. The driving session is the
 first in list order, except that a plan session wins within the same priority. If it uses
 the `plan` agent and is not idle, the snapshot's `pet.plan` is true and the kind is
 `planning`.
+
+The v2 session list is OpenCode's newest 50-session page; the brain does not paginate it.
+`stats` supplies the all-time totals for the header, tray and Settings, and the sessions
+column footer labels the loaded page (`newest 50 of N sessions`).
 
 Message errors are rendered as fatal (red) only when the turn did not continue: if any
 later assistant message without an error exists, the earlier error was retried and is
@@ -117,7 +126,9 @@ trace preview and clears it when the session becomes idle.
 
 ## 5. Face API (stable contract)
 
-- `GET /api/state` — snapshot `{generatedAt, pet, servers[], sessions[], permissions[], forms[]}`
+- `GET /api/state` — snapshot `{generatedAt, pet, stats, servers[], sessions[], permissions[], forms[], hidden[]}`;
+  `stats` is the all-time aggregate `{sessions, subagents, prompts, steps, tokens, cost, range}`
+  from OpenCode's `/api/experimental/session/stats` (v2), independent of the newest-50 page
 - `GET /api/events` — SSE, `event: state` with the same snapshot on every change (~120 ms debounce)
 - `POST /api/prompt` — `{text, sessionId?|server?, newSession?, title?, directory?, model?, agent?, delivery?}`
   → `{server, sessionId, session}`; v2 creates the session with a `location`
@@ -130,7 +141,9 @@ trace preview and clears it when the session becomes idle.
 - `POST /api/form` — `{server, sessionId, formId, answer}`; answers a v2 agent question
   and returns `{ok:true}`
 - `POST /api/session/action` — `{sessionId, action, value}`; includes `move` (v2),
-  `fork`, `model`, `agent`
+  `fork` (`value:{before: messageID}` for a message boundary, omitted for the full
+  session), `btw` (`value:{text}` → `{text}` from the session context, no history
+  mutation), `revert`, `undo`, `redo`, `model`, `agent`
 - `GET /api/messages?server&sessionId&limit` — normalized
   `{role, parts, tokens, time, error}`; parts are `text`, `reasoning`, `tool`
   (`name/status/input/output`) or `file`, so faces can collapse the process trace
@@ -142,7 +155,7 @@ trace preview and clears it when the session becomes idle.
 - `POST /api/announce` — plugin discovery `{serverUrl, directory}`
 - `GET /` — web face
 
-Session object: `{server,id,title,slug,directory,dirName,agent,model:{id,providerID,variant},state,detail,activity,tokens,cost,lastText,planReady,createdAt,updatedAt,pending[],forms[]}`. `planReady` is true after a `plan`-agent turn reaches idle and is cleared when the session starts another turn, errors, or leaves the plan agent; it drives the chat's plan-ready hand-off strip.
+Session object: `{server,id,title,slug,directory,dirName,agent,model:{id,providerID,variant},state,detail,activity,tokens,cost,lastText,planReady,revert,petHidden,createdAt,updatedAt,pending[],forms[]}`. `petHidden` marks a session hidden from the pet; it stays in `sessions[]` but is excluded from the pet rollup/counts. `planReady` is true when the session is idle in the `plan` agent and the last completed assistant message was produced by that agent; it is cleared when the session starts another turn, errors, or leaves the plan agent. The live transition sets it, and an attach/sync backfill reconstructs it from OpenCode's own message history, so no extra readiness state is persisted. It drives the chat hand-off strip, the violet plan-ready bubble and the activity badge. `revert` is the staged edit boundary `{messageID}`; sending a prompt commits it.
 
 ## 6. Pet rendering
 
@@ -161,8 +174,10 @@ base frames 192×208, OpenPets-style activity strips (`activities/<id>.webp`, 4�
 Each state has a coloured aura: idle green (`#6ee7a8`), running blue (`#5ac8ff`),
 waiting amber (`#ffc65c`), error red (`#ff6b6b`), plan violet (`#a78bfa`). Plan mode keeps
 the waiting/error pose when it needs attention, but uses the violet aura; its bubble still
-shows the amber waiting badge/dot. The whole aura layer is gated by the shell config
-`auras` (Settings → Auras).
+shows the amber waiting badge/dot. A finished plan (idle with `planReady`) keeps a violet
+plan-ready bubble in the waiting bubble's badge/glow style until the next turn, an error,
+an agent change or hide; it is not subject to the finished-bubble limit. The whole aura
+layer is gated by the shell config `auras` (Settings → Auras).
 
 Codex V2 sheets use `0 idle, 1 running-right, 2 running-left, 3 waving, 4 jumping,
 5 failed, 6 waiting, 7 running, 8 review, 9–10 look directions`. The face uses
@@ -217,7 +232,8 @@ AppImage first, deb/rpm later, no Flatpak in v1.
 | `lastAgent` | string | last agent picked with `/agent`; fallback for a blank chat |
 | `auras` | boolean (default `true`) | coloured glow around the pet for idle/running/waiting/error/plan |
 | `sendWith` | `"ctrl-enter"` (default) \| `"enter"` | whether Ctrl/Cmd+Enter or Enter sends; in Enter mode Shift+Enter adds a newline |
-| `panelWidth` | number (default `560`) | preferred panel width in px; drag the panel's left edge to change it. Clamped to 460–1200 and the display work area |
+| `panelWidth` | number (default `560`) | preferred panel width in px; drag any edge or corner to change it. Clamped to 460–1200 and the display work area |
+| `panelHeight` | number (default `574`) | preferred panel height in px; drag any edge or corner to change it. Clamped to 340–1200 and the display work area. Growing toward the pet pushes it along, clamped to the screen |
 | `petPosition` | `{x,y}` | last pet window position in screen coordinates; restored if it still overlaps a display |
 
 Precedence: `--facing` CLI flag → config file → default. Changing facing in the UI
@@ -252,11 +268,16 @@ Wayland may still refuse programmatic positioning; the shell's XWayland mode is 
   `session.reasoning.*` and `session.tool.*` for the live activity preview). The durable
   inbox (`GET /api/session/{id}/inbox`, `PATCH`/`DELETE .../{inboxID}`) backs the queue
   strip; the brain tracks inbox items from `session.inbox.*` events and hydrates active
-  sessions on attach. Fork is implemented
-  (`POST /api/session/{id}/fork`; `session.forked` carries no info, so the client fetches
-  the new session to pick up its `(fork #N)` title). Model/agent switch
+  sessions on attach. Fork is implemented with an optional message boundary
+  (`POST /api/session/{id}/fork {before}`; `session.forked` carries no info, so the
+  client fetches the new session to pick up its `(fork #N)` title). Model/agent switch
   (`/api/session/{id}/model`, `/agent`), session move (`/api/session/{id}/move`) and
-  creating at a `location` are implemented for v2. Compact/share/revert are not.
+  creating at a `location` are implemented for v2. Editing uses the staged revert
+  (`POST /revert/stage {messageID}`, `DELETE /revert`, `POST /revert/commit`); the brain
+  commits a staged revert before sending the replacement prompt. Aggregate totals come from
+  experimental `GET /api/experimental/session/stats?tools=none`. `/btw` uses
+  `POST /api/session/{id}/generate {prompt}` and returns transient text from the session
+  context without mutating history. Compact/share are not wired for v2.
 - **v2 forms** are agent questions that block a session: `GET /api/form?location[directory]=…`
   lists pending forms for a location, `POST /api/session/{id}/form/{formID}/reply`
   `{answer}` answers one, and `DELETE …/form/{formID}?message=…` cancels. Events are

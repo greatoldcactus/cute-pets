@@ -58,7 +58,7 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
    used values. Type `/cd /path` to change the directory, `/model` to pick a model,
    `/effort` to choose its reasoning effort, then send the first message.
 4. **`/` in the composer** lists commands — agent ones (`/init`, `/review`) and pet ones
-   (`/cd`, `/fork`, `/model`, `/effort`, `/agent`, `/plan`, `/build`, `/compact`, `/undo`,
+   (`/cd`, `/fork`, `/btw`, `/model`, `/effort`, `/agent`, `/plan`, `/build`, `/compact`, `/undo`,
    `/redo`, `/share`, `/abort`, `/pets`). Tab completes the highlighted command (or
    directory) into the composer so you can keep typing; Enter runs the selection. `/plan`
    and `/build` can carry the message to send after switching (`/build go`). After
@@ -66,7 +66,9 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
    current/last directory and every session's directory; type any other absolute path and
    press Enter).
 5. **Right-click a session or bubble → Hide from pet** to clear finished work out of the
-   way. Nothing is deleted; Settings has an *unhide* list.
+   way. Nothing is deleted: the session stays in OpenCode and in the sessions column; use
+   the `shown / hidden / all` visibility filter there (or the chat header's *show in pet*)
+   to bring it back.
 
 ---
 
@@ -74,14 +76,41 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
 
 **Sessions** — every session with its real title, project directory, agent, model and
 token/cost totals, deduplicated across the several `opencode serve` processes that can
-share one database. Sessions that need you come first, then failed ones, then running ones,
-each group in the order the sessions were created — a running session never jumps around
-just because it emitted a token. Idle sessions are ordered by their last update (most
-recent first), so recent work stays findable.
+share one database. Sessions that need you come first, then failed ones, then running ones.
+Within a priority, active sessions follow the last user request (most recent first): a
+prompt is a discrete event, so a running session never jumps around just because it emitted
+a token. Idle sessions are ordered by their last meaningful update — the end of the last
+turn, an edit, or a rename (most recent first) — so recent work stays findable. The list
+loads OpenCode's newest 50-session
+page; the true all-time totals come from `/api/experimental/session/stats`, so the counters
+in the header, sessions footer, tray and Settings include sessions outside that page without
+loading them all.
 
-**Forking** — `/fork` (or right-click a session → Fork) forks the selected session at its
-latest message through the server's own fork endpoint. The child is selected, keeps the
-parent's title with `(fork #N)`, and appears immediately instead of as `(untitled)`.
+**Forking** — `/fork` opens a picker with **Full session** and the newest user messages.
+Choosing a message forks before it and opens the child with that prompt already in the
+composer; choosing **Full session** copies the whole conversation. The inline **fork**
+button on any user message does the same at that point, and right-click a session → Fork
+copies the full history. The child is selected, keeps the parent's title with `(fork #N)`,
+and appears immediately instead of as `(untitled)`.
+
+**Editing earlier turns** — every user message has **edit**, **fork** and **copy** buttons.
+Edit stages OpenCode's revert boundary at that message, puts its text back into the
+composer, and shows a `revert staged · redo` strip. Sending commits the revert and replaces
+everything from that point on; **redo** restores the original history. Attachments and
+images are not restored. On v2, `/undo` and `/redo` use the same stage/clear flow; they were
+previously unimplemented.
+
+**Side questions (`/btw`)** — `/btw <question>` asks a one-shot question against the
+selected session's context using OpenCode 2's transient generate endpoint. It runs in the
+background: the small speech-bubble button in the chat header shows a running dot, and the
+modal with the markdown answer and copy button opens by itself when the answer is ready —
+including when the dialog was closed while the question was still running. It never becomes
+a chat message, changes the session state, or calls tools. Bare `/btw` opens the same dialog
+with a question input. The last question/answer is kept per session while the app runs, so
+closing the dialog does not lose it; the header button reopens it, with a dot while a
+question is running, an answer is unread, or it failed. An answer that arrives while you are
+on another session stays as that session's dot instead of opening over the current chat. v1
+servers report that side questions need OpenCode 2.
 
 **States** — `running`, `waiting` (an approval or an agent question is pending), `error`,
 `idle`, rolled up per pet with the urgent one winning. Bubbles float above the sprite for
@@ -94,8 +123,12 @@ the tail of the last message.
 read-only `plan` agent. The pet turns violet, uses the spritesheet's review row (row 8)
 with a violet aura. A question asked while planning still shows the amber **answer** badge
 and pulse, so the violet mode never hides that the agent is blocked on you. When a plan
-finishes it keeps a violet **plan ready** bubble instead of the normal ✓, and an open chat
-shows a violet **plan ready** strip above the composer with a small **implement** button.
+finishes it keeps a violet **plan ready** bubble in the answer style — solid, badged and
+glowing instead of the normal ✓ — and it stays until you implement or hide it rather than
+falling off with the finished bubbles. Readiness comes from the last completed assistant
+message's agent, so a plan that finished before a brain restart is reconstructed from
+OpenCode's history. An open chat shows a violet **plan ready** strip
+above the composer with a small **implement** button.
 That button switches the session to build and sends `Implement the plan.` in one action —
 the same hand-off as `/build Implement the plan.`, so read the plan, then click once.
 `/build` switches back. Both commands also accept the message to send
@@ -133,10 +166,10 @@ be cancelled or promoted with **send now**; the queue is OpenCode's own durable 
 it survives restarts and stays in sync with the TUI. Typed-but-unsent text is kept per
 session and restored when you switch back. The **☰** button in the panel header
 (**Ctrl/Cmd+B**) hides the sessions column so the chat fills the whole panel. While it is
-hidden, a round activity badge shows how many sessions are running or waiting; hover or
-click it for a compact list and select one directly. OpenCode 2 hosts sessions at arbitrary
-locations on one server; v1 keeps the old server-per-directory spawn. Messages render
-markdown:
+hidden, a round activity badge shows how many sessions are running, waiting, errored or
+plan-ready; hover or click it for a compact list and select one directly. OpenCode 2
+hosts sessions at arbitrary locations on one server; v1 keeps the old server-per-directory
+spawn. Messages render markdown:
 headings, lists, tables, links, inline code, and fenced code blocks with a language label
 and a copy button. Every user/assistant message with text also has a **copy** button
 (raw markdown) and selectable text. Rendering is local and dependency-free, and everything
@@ -182,14 +215,20 @@ windows. A bubble appearing/disappearing, or the panel opening, therefore cannot
 sprite — the bubble window changes size on its own, hugging the stack and following her,
 and the panel window is sized to the room above the sprite (574 px when there is space,
 less when there is not) or placed below her when there is none. The panel is 560 px wide by
-default; drag its left edge to resize it, and the chosen width is saved in
-`~/.cute-pets/config.json`. The new-chat popover (`+`) is a short panel window. Context
-menus are native menus, and the tooltip is drawn in the pet window (pointer-transparent)
-on behalf of the bubble window.
+default; drag any edge to resize one dimension, or any corner to resize both at once. Growing
+toward the pet pushes it along with the same gap instead of covering it; the pet is clamped to
+the work area, so the panel stops growing once the pet reaches the screen edge. The chosen
+width, height and any pushed pet position are saved in `~/.cute-pets/config.json`. The new-chat
+popover (`+`) is a short panel window. Context menus are native menus, and the tooltip is
+drawn in the pet window (pointer-transparent) on behalf of the bubble window.
 
 **Hidden sessions** — pet-side only: the session keeps existing (and running) in OpenCode,
-it just stops appearing on the pet. Persisted in `~/.cute-pets/hidden.json`, restorable from
-*Settings → Hidden from pet*.
+but stops appearing in the pet's bubbles, aura and counts. It remains in the sessions
+column: the visibility filter defaults to `shown` and offers `hidden` and `all`; hidden
+rows are dimmed and carry an eye-off icon. Right-click one → **Show in pet**, or use the
+chat header's **show in pet** for the selected session. Persisted in
+`~/.cute-pets/hidden.json`. The activity badge ignores pet-hidden sessions, so expand the
+sessions column (`Ctrl/Cmd+B`) to reach them when it is collapsed.
 
 ---
 
@@ -293,10 +332,13 @@ cancelled with
 `DELETE /api/session/{id}/inbox/{inboxID}` and promoted with
 `PATCH /api/session/{id}/inbox/{inboxID}`. Messages are newest-first with `content[]`
 instead of `parts[]` and user text at `m.text`, permission replies use
-`{action, resources}`, `/fork` is wired (`POST /api/session/{id}/fork`; the
-`session.forked` event is translated into a session fetch so the child's
-"… (fork #N)" title shows at once), `/model`/`/agent` use the v2 session routes,
-`/cd` uses `POST /api/session/{id}/move`, and `/compact`, `/share`, `/undo`, `/redo`
+`{action, resources}`, `/fork` is wired (`POST /api/session/{id}/fork`; it accepts
+`before: messageID` and the `session.forked` event is translated into a session fetch so
+the child's "… (fork #N)" title shows at once), `/model`/`/agent` use the v2 session
+routes, `/cd` uses `POST /api/session/{id}/move`, undo/redo use
+`revert/stage` + `revert/commit` / `DELETE revert`, aggregate totals use
+`/api/experimental/session/stats?tools=none`, `/btw` uses
+`POST /api/session/{id}/generate` for transient context-only answers, and `/compact`/`/share`
 are **not wired for v2**.
 
 ---
@@ -327,6 +369,11 @@ violet. Turn them all off with Settings → Auras or `{ "auras": false }` in the
 `sendWith` is `"ctrl-enter"` (default) or `"enter"`; the same choice is in
 Settings → Send message.
 
+Settings → UI scale offers 90/100/110/125/150% for the panel, bubble titles/badges and
+tooltips. It is a renderer-local preference (`localStorage`), not `config.json`; the pet
+sprite stays fixed and the browser tray uses browser zoom. At larger scales the panel can be
+resized for more room.
+
 The pet remembers where it was left as `petPosition` (screen coordinates). It is restored
 only if that spot still overlaps a display; otherwise the pet is clamped back on-screen.
 
@@ -337,8 +384,12 @@ only if that spot still overlaps a display; otherwise the pet is clamped back on
 Everything a face needs, all JSON:
 
 ```
-GET  /api/state            {pet, sessions[], permissions[], forms[], servers[], hidden[]}
-                             sessions carry `queued[]` (undelivered v2 inbox messages)
+GET  /api/state            {pet, stats, sessions[], permissions[], forms[], servers[], hidden[]}
+                             `stats` is the all-time aggregate from OpenCode:
+                             {sessions, subagents, prompts, steps, tokens, cost, range}
+                             sessions carry `queued[]` (undelivered v2 inbox messages) and
+                             `petHidden`; every session is returned, hidden ones are only
+                             excluded from `pet`
 GET  /api/events           SSE stream of the same snapshot
 GET  /api/health           {ok, uptime}
 GET  /api/pet  /api/pets   active pet + installed packs
@@ -359,7 +410,9 @@ POST /api/permission       {id, reply: once|always|reject}
 POST /api/form             {server, sessionId, formId, answer}   answer a v2 agent question
 POST /api/abort            {server, sessionId}
 POST /api/session/hide     {sessionId, hidden:true|false}
-POST /api/session/action   {sessionId, action: move|fork|compact|undo|redo|share|model|agent, …}
+POST /api/session/action   {sessionId, action: move|fork|btw|revert|undo|redo|compact|share|model|agent, …}
+                           fork takes value:{before: messageID}; omit it for the full session
+                           btw takes value:{text} and returns {text} from the session context
 POST /api/attach  /api/detach  /api/announce
 POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI uses it
 ```
@@ -368,8 +421,10 @@ POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI 
 
 ## Limitations
 
-- OpenCode 2: compact, share, undo/redo are v1-only; fork, model/agent switch and
-  moving a session between directories (`/cd`) work on v2.
+- OpenCode 2: compact and share are v1-only; fork (including `before`), model/agent switch,
+  moving a session between directories (`/cd`), and undo/redo (stage/clear) work on v2.
+- `/btw` needs OpenCode 2's transient generate endpoint; on v1 it reports that side
+  questions need OpenCode 2.
 - `/cd` cannot move a v1 session (the v1 server is bound to one directory); start a
   new chat there instead.
 - The chat loads the last 30 messages only; older history is not paged in yet.
