@@ -1874,6 +1874,7 @@ const PET_CMDS=[
   {name:"undo",     d:"revert the last message",            act:"undo"},
   {name:"redo",     d:"restore reverted messages",          act:"redo"},
   {name:"fork",     d:"fork from a previous message or the full session", run:()=>{ openForkPicker(); }},
+  {name:"rename",   d:"rename the selected session",       run:()=>{ const s=currentSession(); if(!s){ alert("open a session first"); return; } const el=$("#prompt"); el.value=`/rename ${s.title}`; el.focus(); el.setSelectionRange(8,el.value.length); }},
   {name:"btw",      d:"ask a quick side question without changing the chat", run:()=>{ openBtw(); }},
   {name:"share",    d:"create a share link",                act:"share"},
   {name:"abort",    d:"stop the running session",           act:"abort"},
@@ -2022,6 +2023,19 @@ async function choosePalette(i){
   if(cmd.act) return runAction(cmd.act);
 }
 
+async function renameSession(title){
+  const s=currentSession();
+  if(!s){ alert("open a session first"); return false; }
+  const next=String(title||"").trim();
+  if(!next) return false;
+  try{
+    const r=await post("/api/session/action",{server:s.server,sessionId:s.id,action:"rename",value:{title:next}});
+    s.title=r.title||next;
+    s.updatedAt=Date.now(); // the brain does the same; reorder immediately
+    render();
+    return true;
+  }catch(e){ alert(String(e)); return false; }
+}
 async function forkSession(s,{before=null,prefill=""}={}){
   try{
     const body={server:s.server,sessionId:s.id,action:"fork"};
@@ -2579,6 +2593,25 @@ $("#composer").addEventListener("submit",async e=>{
     return;
   }
 
+  // /rename <title> renames the selected session. Bare /rename prefills the
+  // current title so it can be edited in place.
+  if(!literal&&(raw==="/rename"||raw.startsWith("/rename "))){
+    const title=raw.slice(7).trim();
+    if(!title){
+      const s2=currentSession();
+      if(!s2){ alert("open a session first"); return; }
+      const el=$("#prompt");
+      el.value=`/rename ${s2.title}`;
+      el.focus();
+      el.setSelectionRange(8,el.value.length);
+      return;
+    }
+    clearComposer();
+    closePalette();
+    await renameSession(title);
+    return;
+  }
+
   // a pet command typed in full runs locally (/model, /undo, …)
   if(!literal&&raw.startsWith("/")){
     const body=raw.slice(1);
@@ -2704,6 +2737,10 @@ ctx.addEventListener("click",async e=>{
   const sid=btn?.dataset.sid; hideCtx();
   if(act==="s-open"){ draft=null; selected=sid; msgKey=""; setExpanded(true); showView("chat"); return; }
   if(act==="s-fork"){ const s=state.sessions.find(x=>x.id===sid); if(s) await forkSession(s); return; }
+  if(act==="s-rename"){ const s=state.sessions.find(x=>x.id===sid); if(!s) return;
+    draft=null; selected=s.id; msgKey=""; setExpanded(true); showView("chat");
+    const el=$("#prompt"); el.value=`/rename ${s.title}`; el.focus(); el.setSelectionRange(8,el.value.length);
+    return; }
   if(act==="s-abort"){ const s=state.sessions.find(x=>x.id===sid); if(s) try{ await post("/api/abort",{server:s.server,sessionId:s.id}); }catch(err){} return; }
   if(act==="s-hide"){ const s=state.sessions.find(x=>x.id===sid); if(!s) return;
     try{ await post("/api/session/hide",{server:s.server,sessionId:s.id,hidden:true});
@@ -2733,6 +2770,7 @@ document.addEventListener("contextmenu",e=>{
   showMenu([
     {label:"Open",act:"s-open",id:s.id},
     {label:"Fork",act:"s-fork",id:s.id},
+    {label:"Rename…",act:"s-rename",id:s.id},
     ...(s.state==="running"?[{label:"Stop",act:"s-abort",id:s.id}]:[]),
     "sep",
     ...(s.petHidden

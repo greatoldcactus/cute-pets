@@ -142,8 +142,8 @@ trace preview and clears it when the session becomes idle.
   and returns `{ok:true}`
 - `POST /api/session/action` — `{sessionId, action, value}`; includes `move` (v2),
   `fork` (`value:{before: messageID}` for a message boundary, omitted for the full
-  session), `btw` (`value:{text}` → `{text}` from the session context, no history
-  mutation), `revert`, `undo`, `redo`, `model`, `agent`
+  session), `rename` (`value:{title}`), `btw` (`value:{text}` → `{text}` from the
+  session context, no history mutation), `revert`, `undo`, `redo`, `model`, `agent`
 - `GET /api/messages?server&sessionId&limit` — normalized
   `{role, parts, tokens, time, error}`; parts are `text`, `reasoning`, `tool`
   (`name/status/input/output`) or `file`, so faces can collapse the process trace

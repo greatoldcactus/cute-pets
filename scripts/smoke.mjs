@@ -190,6 +190,23 @@ try {
   console.log("assistant text:", JSON.stringify(text));
   console.log("tokens:", rec.tokens, "state:", rec.state, "title:", rec.title);
 
+  // --- rename -------------------------------------------------------------
+  const newTitle = `${title} renamed`;
+  const renamed = await post(brainUrl, "/api/session/action", {
+    server,
+    sessionId,
+    action: "rename",
+    value: { title: newTitle },
+  });
+  check(renamed.title === newTitle, `unexpected rename title: ${JSON.stringify(renamed.title)}`);
+  check(renamed.session?.title === newTitle, "rename did not return the session");
+  const renamedState = await get(brainUrl, "/api/state");
+  check(
+    renamedState.sessions.find((s) => s.id === sessionId)?.title === newTitle,
+    "renamed title missing from /api/state",
+  );
+  console.log("renamed:", renamed.title);
+
   // --- /btw side question -------------------------------------------------
   const beforeBtw = await get(
     brainUrl,

@@ -745,6 +745,22 @@ class Hub {
         writeConfig({ lastAgent: value });
         return { ok: true, agent: value };
       }
+      case "rename": {
+        const title = String(typeof value === "string" ? value : value?.title ?? "").trim();
+        if (!title) throw new Error("title required");
+        if (typeof client.setTitle !== "function") throw new Error("renaming is not supported by this server");
+        await client.setTitle(sessionId, title);
+        if (rec) {
+          rec.title = title;
+          // A rename is a meaningful edit: it moves the session in the idle list.
+          rec.updatedAt = Date.now();
+          const hidden = this.store.hidden.get(sessionId);
+          if (hidden) hidden.title = title;
+          this.store.touch();
+        }
+        const session = this.store.snapshot().sessions.find((s) => s.id === sessionId) ?? null;
+        return { ok: true, title, session };
+      }
       case "move": {
         if (!value?.directory) throw new Error("directory required");
         if (typeof client.moveSession !== "function") throw new Error("moving sessions needs OpenCode 2");

@@ -247,6 +247,13 @@ const server = http.createServer(async (req, res) => {
       const action = match[2] ?? null;
 
       if (!action && req.method === "GET") return json(res, 200, { data: session });
+      if (!action && req.method === "PATCH") {
+        const body = await readBody(req);
+        if (typeof body.title === "string" && body.title.trim()) session.title = body.title.trim();
+        session.time.updated = now();
+        broadcast("session.renamed", { sessionID: session.id, title: session.title });
+        return json(res, 200, { data: session });
+      }
       if (action === "message" && req.method === "GET") {
         const rows = [...(messages.get(session.id) ?? [])]
           .sort((a, b) => (a.time?.created ?? 0) - (b.time?.created ?? 0));

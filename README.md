@@ -58,7 +58,7 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
    used values. Type `/cd /path` to change the directory, `/model` to pick a model,
    `/effort` to choose its reasoning effort, then send the first message.
 4. **`/` in the composer** lists commands — agent ones (`/init`, `/review`) and pet ones
-   (`/cd`, `/fork`, `/btw`, `/model`, `/effort`, `/agent`, `/plan`, `/build`, `/compact`, `/undo`,
+   (`/cd`, `/fork`, `/rename`, `/btw`, `/model`, `/effort`, `/agent`, `/plan`, `/build`, `/compact`, `/undo`,
    `/redo`, `/share`, `/abort`, `/pets`). Tab completes the highlighted command (or
    directory) into the composer so you can keep typing; Enter runs the selection. `/plan`
    and `/build` can carry the message to send after switching (`/build go`). After
@@ -80,7 +80,9 @@ share one database. Sessions that need you come first, then failed ones, then ru
 Within a priority, active sessions follow the last user request (most recent first): a
 prompt is a discrete event, so a running session never jumps around just because it emitted
 a token. Idle sessions are ordered by their last meaningful update — the end of the last
-turn, an edit, or a rename (most recent first) — so recent work stays findable. The list
+turn, an edit, or a rename (most recent first) — so recent work stays findable. Rename the
+selected session with `/rename <title>` or right-click → **Rename…**; a rename counts as a
+last update, so it moves the session up. The list
 loads OpenCode's newest 50-session
 page; the true all-time totals come from `/api/experimental/session/stats`, so the counters
 in the header, sessions footer, tray and Settings include sessions outside that page without
@@ -411,8 +413,9 @@ POST /api/permission       {id, reply: once|always|reject}
 POST /api/form             {server, sessionId, formId, answer}   answer a v2 agent question
 POST /api/abort            {server, sessionId}
 POST /api/session/hide     {sessionId, hidden:true|false}
-POST /api/session/action   {sessionId, action: move|fork|btw|revert|undo|redo|compact|share|model|agent, …}
+POST /api/session/action   {sessionId, action: move|fork|rename|btw|revert|undo|redo|compact|share|model|agent, …}
                            fork takes value:{before: messageID}; omit it for the full session
+                           rename takes value:{title}
                            btw takes value:{text} and returns {text} from the session context
 POST /api/attach  /api/detach  /api/announce
 POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI uses it
