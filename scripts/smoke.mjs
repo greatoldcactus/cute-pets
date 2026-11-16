@@ -53,6 +53,22 @@ async function get(base, route) {
   return res.json();
 }
 
+// Attaching happens after the face API is already up, so /api/health can answer
+// before the first sync has populated servers/stats. Poll the snapshot itself.
+async function waitForState(base, predicate, label, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    try {
+      last = await get(base, "/api/state");
+      if (predicate(last)) return last;
+    } catch {}
+    await sleep(150);
+  }
+  const summary = { servers: last?.servers?.length ?? 0, stats: Boolean(last?.stats) };
+  throw new Error(`${label} (${JSON.stringify(summary)})`);
+}
+
 async function post(base, route, body) {
   const res = await fetch(base + route, {
     method: "POST",
@@ -137,7 +153,11 @@ try {
   const health = await get(brainUrl, "/api/health");
   check(health?.ok, `brain not healthy at ${brainUrl}`);
 
-  let state = await get(brainUrl, "/api/state");
+  let state = await waitForState(
+    brainUrl,
+    (s) => s.servers?.some((x) => x.online) && s.stats && typeof s.stats.sessions === "number",
+    "brain did not finish its first sync",
+  );
   check(state.servers?.length, "no opencode server attached");
   check(state.servers.some((s) => s.online), "attached server is offline");
   console.log("servers:", state.servers.map((s) => `${s.url} ${s.online ? "online" : "offline"}`).join(", "));
