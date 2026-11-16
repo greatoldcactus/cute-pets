@@ -15,6 +15,14 @@ import { ensureBuiltin } from "./pets.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// The same preamble the OpenCode TUI uses for its /btw side questions. The
+// generate endpoint is transient, but this keeps the answer concise and stops
+// the model from taking actions.
+const BTW_PREAMBLE =
+  "The user is asking a quick side question about the conversation so far. " +
+  "Answer directly and concisely in markdown from what you already know. " +
+  "Do not call any tools and do not take any actions.";
+
 function freePort() {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
@@ -183,6 +191,7 @@ class Hub {
     this.clients = new Map();
     this.credentials = new Map(); // url -> password (never exposed in snapshots)
     this.permissionTimer = null;
+    this.planChecks = new Set(); // in-flight plan-readiness backfills
     this.wslTried = new Map(); // url -> last attach attempt, so a dead WSL service is not retried every tick
     // Sessions the pet should not show. Local only: nothing is deleted in OpenCode.
     try {
@@ -353,10 +362,12 @@ class Hub {
     // authoritative list may prune records.
     let sessions = null;
     try { sessions = await client.listSessions(); } catch {}
-    const [statuses, permissions] = await Promise.all([
+    const [statuses, permissions, stats] = await Promise.all([
       client.statuses().catch(() => ({})),
       client.permissions().catch(() => []),
+      typeof client.stats === "function" ? client.stats().catch(() => null) : Promise.resolve(null),
     ]);
+    if (stats) this.store.setStats(url, stats);
     if (Array.isArray(sessions)) {
       for (const info of sessions) this.store.upsertSession(url, info);
       for (const info of sessions) {
@@ -393,6 +404,53 @@ class Hub {
       const byId = new Map();
       for (const list of lists) for (const form of list ?? []) if (form?.id) byId.set(form.id, form);
       this.store.replaceForms(url, [...byId.values()]);
+    }
+    // A plan turn that finished before attach (or while the stream was down) has
+    // no live transition to set planReady, so reconstruct it from OpenCode's own
+    // message history. No extra state is persisted: the last assistant message's
+    // agent and the session's current idle/plan state are enough.
+    if (Array.isArray(sessions)) {
+      await Promise.all(sessions.map((info) => this.#backfillPlan(url, info)));
+    }
+  }
+
+  async #backfillPlan(url, info) {
+    const rec = this.store.sessions.get(`${url}::${info?.id}`);
+    if (!info?.id || !rec || rec.state !== STATE.IDLE || rec.agent !== "plan") return;
+    const stamp = Number(info.time?.updated) || Number(info.time?.created) || 0;
+    if (rec.planStamp != null && stamp <= rec.planStamp) return;
+    const key = `${url}::${info.id}:${stamp}`;
+    if (this.planChecks.has(key)) return;
+    this.planChecks.add(key);
+    try {
+      const entry = this.clients.get(url);
+      if (!entry || typeof entry.client.messages !== "function") return;
+      // Ask for a few rows: v2 interleaves idle/agent-switched records, which the
+      // client drops, so the latest user/assistant message may not be the first.
+      const msgs = await entry.client.messages(info.id, 20).catch(() => null);
+      if (!msgs) return;
+      const last = msgs.reduce((a, b) => {
+        const ta = Number(a?.info?.time?.created) || 0;
+        const tb = Number(b?.info?.time?.created) || 0;
+        return tb >= ta ? b : a;
+      }, null);
+      if (!last) return;
+      const isAssistant = last.info?.role === "assistant";
+      const text = isAssistant
+        ? (last.parts ?? [])
+          .filter((part) => part.type === "text" && part.text)
+          .map((part) => part.text)
+          .join("\n")
+        : "";
+      this.store.setPlanReady(url, info.id, {
+        ready: isAssistant && last.info?.agent === "plan",
+        text,
+        stamp,
+      });
+    } catch {
+      // A failed backfill must not break attach/sync; the next sync retries.
+    } finally {
+      this.planChecks.delete(key);
     }
   }
 
@@ -710,18 +768,40 @@ class Hub {
       case "unshare":
         await client.unshare(sessionId);
         return { ok: true };
-      case "undo": {
-        const msgs = await client.messages(sessionId, 50);
-        const lastUser = [...(msgs ?? [])].reverse().find((m) => m.info?.role === "user");
-        if (!lastUser) throw new Error("nothing to undo");
-        await client.revert(sessionId, lastUser.info.id);
-        return { ok: true, reverted: lastUser.info.id };
+      case "undo":
+      case "revert": {
+        let messageID = value && typeof value === "object" ? value.messageID : value;
+        if (!messageID) {
+          const msgs = await client.messages(sessionId, 50);
+          const lastUser = [...(msgs ?? [])].reverse().find((m) => m.info?.role === "user");
+          if (!lastUser) throw new Error("nothing to undo");
+          messageID = lastUser.info.id;
+        }
+        await client.revert(sessionId, messageID);
+        const info = await refresh();
+        // v1 does not always project the revert into the session info; keep the
+        // boundary locally so the face can offer redo. v2 overwrites this on the
+        // next sync with the server's own value.
+        if (!info?.revert) this.store.setRevert(url, sessionId, { messageID });
+        return { ok: true, reverted: messageID };
       }
       case "redo":
         await client.unrevert(sessionId);
+        this.store.setRevert(url, sessionId, null);
+        await refresh();
         return { ok: true };
+      case "btw": {
+        const question = (typeof value === "string" ? value : value?.text ?? "").trim();
+        if (!question) throw new Error("question required");
+        if (typeof client.generate !== "function") throw new Error("side questions need OpenCode 2");
+        const out = await client.generate(sessionId, `${BTW_PREAMBLE} ${question}`);
+        return { ok: true, text: out?.text ?? "" };
+      }
       case "fork": {
-        const out = await client.forkSession(sessionId);
+        const before = value && typeof value === "object"
+          ? (value.before ?? value.messageID ?? null)
+          : (value ?? null);
+        const out = await client.forkSession(sessionId, before);
         const info = out?.data ?? out;
         if (!info?.id) throw new Error("fork returned no session");
         // v2 titles forks itself ("… (fork #N)"); if a server does not, keep the
@@ -789,19 +869,50 @@ class Hub {
       }
     }
     const rec = this.store.sessions.get(`${url}::${id}`);
+    // Editing a previous message is a staged revert in OpenCode. Sending the
+    // replacement prompt commits that boundary first, exactly like the TUI.
+    if (!newSession && rec?.revert?.messageID && typeof client.commitRevert === "function") {
+      await client.commitRevert(id);
+      rec.revert = null;
+      this.store.touch();
+    } else if (!newSession && rec?.revert && client.version !== "2") {
+      // v1 revert is immediate; sending the replacement consumes it.
+      rec.revert = null;
+      this.store.touch();
+    }
     const wasRunning = rec?.state === STATE.RUNNING;
     const wasWaiting = rec?.state === STATE.WAITING;
     const explicit = delivery === "queue" || delivery === "steer" ? delivery : null;
+    const promptAt = Date.now();
+    const prev = rec
+      ? { state: rec.state, busy: rec.busy, planReady: rec.planReady, lastPromptAt: rec.lastPromptAt, updatedAt: rec.updatedAt }
+      : null;
     if (rec) {
       rec.state = STATE.RUNNING;
-      rec.updatedAt = Date.now();
+      rec.lastPromptAt = promptAt;
+      rec.updatedAt = promptAt;
       this.store.touch();
     }
+    // A rejected send must not leave the session looking busy forever. Only
+    // roll back if no real event or later prompt has advanced the record.
+    const rollback = () => {
+      if (!rec || !prev) return;
+      if (rec.state !== STATE.RUNNING || rec.lastPromptAt !== promptAt) return;
+      rec.state = prev.state;
+      rec.busy = prev.busy;
+      rec.planReady = prev.planReady;
+      rec.lastPromptAt = prev.lastPromptAt;
+      rec.updatedAt = prev.updatedAt;
+      this.store.touch();
+    };
     if (command) {
       // `/command` blocks until the command finishes; don't hold the face request.
       void client
         .command(id, { command, args: text ?? "" })
-        .catch((err) => log(`command ${command} failed: ${err.message ?? err}`));
+        .catch((err) => {
+          rollback();
+          log(`command ${command} failed: ${err.message ?? err}`);
+        });
     } else {
       // OpenCode's plan plugin admits a synthetic mode reminder (delivery
       // "steer", resume:false) when a plan session is created or the agent
@@ -830,7 +941,13 @@ class Hub {
           extra = { delivery: "steer" };
         }
       }
-      const out = await client.prompt(id, text, extra ?? undefined);
+      let out;
+      try {
+        out = await client.prompt(id, text, extra ?? undefined);
+      } catch (err) {
+        rollback();
+        throw err;
+      }
       // v2 returns the admitted inbox item, so the face can show it in the queue
       // strip before the event stream catches up.
       if (client.version === "2" && out?.data?.id) {

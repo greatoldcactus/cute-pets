@@ -15,6 +15,13 @@ const KIND_OF_STATE = { waiting: "waiting", error: "error", running: "working", 
 
 export const keyOf = (server, id) => `${server}::${id}`;
 
+// Model refs are small; compare the fields that identify one instead of JSON
+// key order, so a periodic sync never looks like a model switch.
+const sameModelRef = (a, b) =>
+  a === b ||
+  Boolean(a && b && a.id === b.id && a.providerID === b.providerID &&
+    (a.variant ?? "default") === (b.variant ?? "default"));
+
 // Normalize a v2 inbox item whether it came from GET /inbox, the prompt
 // response or an enqueued event (where the id/timestamp live beside the item).
 function inboxRecord(item, createdAt = null) {
@@ -37,6 +44,7 @@ export class PetState {
     this.permissions = new Map(); // permission id -> [key, request]
     this.forms = new Map(); // form id -> [key, form]
     this.inbox = new Map(); // session key -> Map(inboxID -> queued input)
+    this.serverStats = new Map(); // url -> aggregate stats from /experimental/session/stats
     this.listeners = new Set();
     this.timer = null;
   }
@@ -83,6 +91,20 @@ export class PetState {
     const isNew = !rec;
     const serverUpdated = Number(info.time?.updated) || 0;
     const serverCreated = Number(info.time?.created) || 0;
+    const serverBusy = Number(info.time?.busy) || 0;
+    const serverIdle = Number(info.time?.idle) || 0;
+    // v2 reports the end of the last turn separately from the last content
+    // update, which is the accurate order key for an idle session.
+    const serverEnd = serverIdle && serverIdle >= serverBusy ? serverIdle : 0;
+    // A partial event (rename, revert) may carry no timestamp. Treat a
+    // user-visible metadata change as a real touch, unlike token/cost updates.
+    const touched = rec
+      ? (Boolean(info.title) && info.title !== rec.title) ||
+        (Boolean(info.agent) && info.agent !== rec.agent) ||
+        (Boolean(info.directory) && info.directory !== rec.directory) ||
+        (Boolean(info.model) && !sameModelRef(info.model, rec.model)) ||
+        ("revert" in info && (info.revert?.messageID ?? null) !== (rec.revert?.messageID ?? null))
+      : false;
     if (!rec) {
       rec = {
         key,
@@ -102,16 +124,24 @@ export class PetState {
         lastText: "",
         lastAssistantID: null,
         planReady: false,
+        planStamp: null,
+        revert: null,
         createdAt: serverCreated || Date.now(),
-        updatedAt: serverUpdated || Date.now(),
+        updatedAt: serverUpdated || serverEnd || Date.now(),
+        lastPromptAt: 0,
       };
       this.sessions.set(key, rec);
     }
-    // Creation time is the stable order key for active sessions. A record that
-    // was first seen without it may get the real value from a later sync; keep
-    // the earlier of the two, since the fallback is "now" and never smaller.
+    // Creation time is the fallback order key for active sessions that have not
+    // been prompted since the brain started. A record that was first seen
+    // without it may get the real value from a later sync; keep the earlier of
+    // the two, since the fallback is "now" and never smaller.
     if (serverCreated) rec.createdAt = Math.min(rec.createdAt || serverCreated, serverCreated);
-    if (info.title) rec.title = info.title;
+    if (info.title) {
+      rec.title = info.title;
+      const hidden = this.hidden.get(info.id);
+      if (hidden) hidden.title = info.title;
+    }
     if (info.directory) rec.directory = info.directory;
     if (info.agent) {
       // Leaving the plan agent means the finished plan is no longer actionable.
@@ -121,6 +151,9 @@ export class PetState {
     if (info.model) rec.model = info.model;
     if (info.tokens) rec.tokens = { input: info.tokens.input ?? 0, output: info.tokens.output ?? 0 };
     if (typeof info.cost === "number") rec.cost = info.cost;
+    // A staged revert is a message boundary. v2 projects it on the session info
+    // and sends revert.staged/cleared events; v1 may not include it.
+    if ("revert" in info) rec.revert = info.revert ? { messageID: info.revert.messageID } : null;
     // v2 sessions carry the timestamps of the last busy/idle transition. Use
     // them on sync/attach so a session that is still working is not reset to
     // idle just because no status event arrived while the brain was away.
@@ -134,11 +167,14 @@ export class PetState {
     if (rec.busy && rec.state === STATE.IDLE && !this.hasPending(rec.key)) {
       rec.state = STATE.RUNNING;
     }
-    // A periodic sync re-sends the same session metadata. Do not make every idle
-    // session look freshly updated: prefer the server's last-update timestamp.
-    if (isNew) rec.updatedAt = serverUpdated || Date.now();
-    else if (serverUpdated) rec.updatedAt = Math.max(rec.updatedAt || 0, serverUpdated);
-    else rec.updatedAt = Date.now();
+    // A periodic sync re-sends the same metadata, and token/cost events are
+    // bookkeeping, not edits: neither may reorder idle sessions. Prefer the
+    // server's timestamps when present; a timestamp-less partial event moves
+    // the session only when it changed something user-visible.
+    const stamp = Math.max(serverUpdated, serverEnd);
+    if (isNew) rec.updatedAt = stamp || Date.now();
+    else if (stamp) rec.updatedAt = Math.max(rec.updatedAt || 0, stamp);
+    else if (touched) rec.updatedAt = Date.now();
     this.touch();
     return rec;
   }
@@ -155,6 +191,12 @@ export class PetState {
     const prevActivity = rec.activity;
     if (type === "busy") {
       rec.busy = true;
+      // A turn starting is the closest signal to "the user just asked
+      // something" for prompts sent outside this panel. Status polls repeat
+      // busy, so only a transition counts.
+      if (prevState === STATE.IDLE || prevState === STATE.WAITING) {
+        rec.lastPromptAt = Date.now();
+      }
       // A permission/form can still be pending while the turn continues; the
       // pending request is the more useful state.
       rec.state = this.hasPending(rec.key) ? STATE.WAITING : STATE.RUNNING;
@@ -245,6 +287,69 @@ export class PetState {
     rec.activity = null;
     rec.updatedAt = Date.now();
     this.touch();
+  }
+
+  // Backfill plan readiness from OpenCode's own message history. A live plan
+  // turn is already marked by the busy -> idle transition; this covers a plan
+  // that finished before the brain attached (or while it was disconnected).
+  // `ready` is derived by the caller from the last assistant message's agent.
+  setPlanReady(server, id, { ready = false, text = "", stamp = 0 } = {}) {
+    const rec = this.sessions.get(keyOf(server, id));
+    if (!rec) return;
+    rec.planStamp = stamp;
+    // Readiness is only valid for an idle plan session; re-check the record in
+    // case it changed while the message fetch was in flight.
+    rec.planReady = Boolean(ready && rec.state === STATE.IDLE && rec.agent === "plan");
+    if (text) rec.lastText = String(text).slice(-600);
+    this.touch();
+  }
+
+  setRevert(server, id, revert) {
+    const rec = this.sessions.get(keyOf(server, id));
+    if (!rec) return;
+    const next = revert ? { messageID: revert.messageID } : null;
+    const changed = (rec.revert?.messageID ?? null) !== (next?.messageID ?? null);
+    rec.revert = next;
+    // Staging or clearing an edit is a user action on an idle chat; it should
+    // move the conversation like a prompt would.
+    if (changed) rec.updatedAt = Date.now();
+    this.touch();
+  }
+
+  // Aggregate totals come from OpenCode's stats endpoint, not the session page.
+  // Keep only the fields a face needs; the endpoint also returns activity/models.
+  setStats(server, stats) {
+    if (!stats) return;
+    const num = (v) => Number(v) || 0;
+    const tokens = stats.tokens ?? {};
+    const cache = tokens.cache ?? {};
+    this.serverStats.set(server, {
+      sessions: num(stats.sessions),
+      subagents: num(stats.subagents),
+      prompts: num(stats.prompts),
+      steps: num(stats.steps),
+      tokens: {
+        input: num(tokens.input),
+        output: num(tokens.output),
+        reasoning: num(tokens.reasoning),
+        cache: { read: num(cache.read), write: num(cache.write) },
+      },
+      cost: num(stats.cost),
+      range: stats.range ? { from: num(stats.range.from), to: num(stats.range.to) } : null,
+    });
+    this.touch();
+  }
+
+  statsSummary() {
+    // Servers sharing one database return the same stats; independent servers
+    // cannot be safely summed, so keep the largest snapshot as representative.
+    let best = null;
+    for (const [url, stats] of this.serverStats) {
+      const srv = this.servers.get(url);
+      if (srv && !srv.online) continue;
+      if (!best || stats.sessions > best.sessions) best = stats;
+    }
+    return best;
   }
 
   // A small live summary for the process trace: the latest thought, or the tool
@@ -392,19 +497,26 @@ export class PetState {
       const pending = this.hasPending(rec.key);
       if (pending) rec.state = STATE.WAITING;
       // Answering a form does not end the turn: restore the busy state instead
-      // of dropping the session to idle until the next event arrives.
-      else if (rec.state === STATE.WAITING) rec.state = rec.busy ? STATE.RUNNING : STATE.IDLE;
+      // of dropping the session to idle until the next event arrives. When it
+      // really does end here, that is the turn's end time for ordering.
+      else if (rec.state === STATE.WAITING) {
+        if (rec.busy) rec.state = STATE.RUNNING;
+        else {
+          rec.state = STATE.IDLE;
+          rec.updatedAt = Date.now();
+        }
+      }
     }
     this.touch();
   }
 
-  petSummary(sessions) {
+  petSummary(sessions, hiddenCount = 0) {
     const counts = { waiting: 0, error: 0, running: 0, idle: 0 };
     for (const s of sessions) counts[s.state] = (counts[s.state] ?? 0) + 1;
     const state = counts.waiting ? "waiting" : counts.error ? "error" : counts.running ? "running" : "idle";
     // The pet has one body: colour/pose follow the most urgent session; within
     // that priority a plan session wins, so plan mode stays visible while other
-    // sessions run. (The list order itself is creation-based and stable.)
+    // sessions run. (The list order itself is request/update-based and stable.)
     const topState = sessions[0]?.state;
     const top = sessions.find((s) => s.state === topState && s.agent === "plan") ?? sessions[0];
     const plan = Boolean(top && top.agent === "plan" && top.state !== "idle");
@@ -412,7 +524,7 @@ export class PetState {
       state === "waiting" ? `${counts.waiting} need${counts.waiting === 1 ? "s" : ""} you`
       : state === "error" ? `${counts.error} failed`
       : state === "running" ? `${counts.running} ${plan ? "planning" : "working"}`
-      : sessions.length ? "all done" : "no sessions";
+      : sessions.length ? "all done" : hiddenCount ? "all hidden" : "no sessions";
     return {
       state,
       plan,
@@ -479,8 +591,8 @@ export class PetState {
       }
     }
 
-    const sessions = [...best.values()]
-      .filter(({ rec }) => !this.hidden.has(rec.id))
+    const allSessions = [...best.values()];
+    const sessions = allSessions
       .map(({ rec }) => ({
         server: rec.server,
         id: rec.id,
@@ -497,8 +609,11 @@ export class PetState {
         cost: rec.cost,
         lastText: rec.lastText,
         planReady: Boolean(rec.planReady),
+        revert: rec.revert ? { messageID: rec.revert.messageID } : null,
+        petHidden: this.hidden.has(rec.id),
         createdAt: created.get(rec.id) || rec.createdAt || 0,
         updatedAt: rec.updatedAt,
+        lastPromptAt: rec.lastPromptAt || 0,
         pending: this.pendingFor(rec.key).map((p) => ({
           id: p.id,
           permission: p.permission,
@@ -519,15 +634,19 @@ export class PetState {
             createdAt: q.createdAt,
           })),
       }))
-      // Within a priority, active sessions are ordered by creation time, not by
-      // last update: concurrent sessions emit activity every moment, so recency
-      // would reshuffle the list (and the bubble stack) several times a second.
-      // Idle sessions keep the useful "recent work first" order, which is stable
-      // because idle records no longer refresh on a sync.
+      // Within a priority, idle sessions are ordered by their last meaningful
+      // update (turn end, edit, rename), newest first. Active sessions use the
+      // last user request instead of activity: a prompt is a discrete event, so
+      // streaming cannot reshuffle the list and the bubble stack. Sessions
+      // without a request since the brain started fall back to creation time.
       .sort((a, b) => (PRIORITY[b.state] - PRIORITY[a.state]) ||
         (a.state === STATE.IDLE
           ? (b.updatedAt - a.updatedAt) || a.id.localeCompare(b.id)
-          : (a.createdAt - b.createdAt) || a.id.localeCompare(b.id)));
+          : ((b.lastPromptAt || b.createdAt) - (a.lastPromptAt || a.createdAt)) || a.id.localeCompare(b.id)));
+
+    // Pet-hidden sessions stay in the session list (the panel filters them by
+    // choice), but they must not colour, count or animate the pet.
+    const visible = sessions.filter((s) => !s.petHidden);
 
     const permissions = [...this.permissions.entries()].map(([id, [key, req]]) => ({
       id,
@@ -543,7 +662,8 @@ export class PetState {
 
     return {
       generatedAt: Date.now(),
-      pet: this.petSummary(sessions),
+      pet: this.petSummary(visible, sessions.length - visible.length),
+      stats: this.statsSummary(),
       servers: [...this.servers.values()],
       sessions,
       hidden: this.hiddenList().map((h) => ({

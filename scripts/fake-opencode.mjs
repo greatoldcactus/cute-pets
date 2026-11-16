@@ -154,6 +154,31 @@ const server = http.createServer(async (req, res) => {
     if (route === "GET /api/location") {
       return json(res, 200, { data: { directory } });
     }
+    if (route === "GET /api/experimental/session/stats") {
+      const all = [...sessions.values()];
+      const tokens = all.reduce((acc, s) => {
+        acc.input += Number(s.tokens?.input) || 0;
+        acc.output += Number(s.tokens?.output) || 0;
+        return acc;
+      }, { input: 0, output: 0 });
+      const times = all.map((s) => Number(s.time?.created) || 0).filter(Boolean);
+      return json(res, 200, {
+        data: {
+          range: { from: times.length ? Math.min(...times) : now(), to: now() },
+          sessions: all.length,
+          subagents: 0,
+          prompts: 0,
+          steps: 0,
+          tokens: { ...tokens, reasoning: 0, cache: { read: 0, write: 0 } },
+          cost: all.reduce((n, s) => n + (Number(s.cost) || 0), 0),
+          tools: { mode: "none" },
+          activeDays: 0,
+          streak: 0,
+          activity: [],
+          models: [],
+        },
+      });
+    }
 
     if (route === "GET /api/session") {
       return json(res, 200, { data: [...sessions.values()] });
@@ -188,6 +213,33 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    const rev = url.pathname.match(/^\/api\/session\/([^/]+)\/revert(?:\/(stage|commit))?$/);
+    if (rev) {
+      const session = sessionByID(rev[1]);
+      if (!session) return json(res, 404, { error: "session not found" });
+      const step = rev[2] ?? null;
+      if (!step && req.method === "DELETE") {
+        session.revert = null;
+        broadcast("session.revert.cleared", { sessionID: session.id });
+        res.writeHead(204);
+        return res.end();
+      }
+      if (step === "stage" && req.method === "POST") {
+        const body = await readBody(req);
+        if (!body.messageID) return json(res, 400, { error: "messageID required" });
+        session.revert = { messageID: body.messageID };
+        broadcast("session.revert.staged", { sessionID: session.id, revert: session.revert });
+        return json(res, 200, { data: session.revert });
+      }
+      if (step === "commit" && req.method === "POST") {
+        session.revert = null;
+        broadcast("session.revert.committed", { sessionID: session.id });
+        res.writeHead(204);
+        return res.end();
+      }
+      return json(res, 404, { error: "not found", route });
+    }
+
     const match = url.pathname.match(/^\/api\/session\/([^/]+)(?:\/([^/]+))?$/);
     if (match) {
       const session = sessionByID(match[1]);
@@ -208,6 +260,35 @@ const server = http.createServer(async (req, res) => {
         if (body.agent) session.agent = body.agent;
         session.time.updated = now();
         return json(res, 200, { data: session });
+      }
+      if (action === "fork" && req.method === "POST") {
+        // v2 forks copy projected history before a message ID.
+        const body = await readBody(req);
+        const before = body.before ?? null;
+        const list = messages.get(session.id) ?? [];
+        let copy = [...list];
+        if (before) {
+          const idx = list.findIndex((m) => m.id === before);
+          if (idx < 0) return json(res, 404, { error: "message not found" });
+          copy = list.slice(0, idx);
+        }
+        const base = session.title.replace(/ \(fork #\d+\)$/, "");
+        const n = [...sessions.values()]
+          .filter((s) => s.title.startsWith(`${base} (fork #`)).length + 1;
+        const child = createSession({
+          title: `${base} (fork #${n})`,
+          agent: session.agent,
+          model: session.model,
+          location: session.location,
+        });
+        messages.set(child.id, copy.map((m) => ({ ...m })));
+        broadcast("session.created", child);
+        return json(res, 200, { data: child });
+      }
+      if (action === "generate" && req.method === "POST") {
+        // Transient side question: deliberately does not touch messages.
+        await readBody(req);
+        return json(res, 200, { data: { text: "A concise side answer." } });
       }
       if (action === "prompt" && req.method === "POST") {
         prompt(session, await readBody(req));

@@ -75,6 +75,7 @@ export class OpenCodeV2Client {
       model: s.model,
       tokens: s.tokens,
       cost: s.cost,
+      revert: s.revert ?? null,
       time: s.time
         ? {
             created: s.time.created ?? null,
@@ -228,6 +229,9 @@ export class OpenCodeV2Client {
       info: {
         id: m.id,
         role: m.type === "user" ? "user" : m.type === "assistant" ? "assistant" : m.type,
+        // OpenCode stores the agent that produced each assistant message. The
+        // brain uses it to reconstruct plan readiness after a restart.
+        agent: m.agent ?? null,
         time: { created: m.time?.created ?? null },
         tokens: m.tokens ?? null,
         cost: m.cost ?? null,
@@ -282,7 +286,7 @@ export class OpenCodeV2Client {
   command(id, { command, args = "" }) {
     return this.#req(`/api/session/${enc(id)}/command`, {
       method: "POST",
-      body: JSON.stringify({ name: command, arguments: args }),
+      body: JSON.stringify({ name: command, text: args }),
       timeout: 0,
     });
   }
@@ -337,13 +341,41 @@ export class OpenCodeV2Client {
     return out?.data ?? [];
   }
 
+  // All-time aggregate over the local database. Used for totals when the
+  // session list only returns its newest page.
+  async stats() {
+    const out = await this.#req("/api/experimental/session/stats?tools=none");
+    return out?.data ?? null;
+  }
+
+  // One-shot answer from the session context; does not append to history.
+  generate(id, prompt) {
+    return this.#req(`/api/session/${enc(id)}/generate`, {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+      timeout: 0,
+    }).then((out) => out?.data ?? null);
+  }
+
   setModel(id, ref) { return this.post(`/api/session/${enc(id)}/model`, { model: ref }); }
   setAgent(id, agent) { return this.post(`/api/session/${enc(id)}/agent`, { agent }); }
   summarize() { throw new Error("summarize is not implemented for OpenCode 2"); }
   share() { throw new Error("share is not implemented for OpenCode 2"); }
   unshare() { throw new Error("share is not implemented for OpenCode 2"); }
-  revert() { throw new Error("revert is not implemented for OpenCode 2"); }
-  unrevert() { throw new Error("unrevert is not implemented for OpenCode 2"); }
+  // Editing history is staged: stage the boundary, prefill the composer, then
+  // commit before sending the replacement prompt. Redo clears the stage.
+  revert(id, messageID) {
+    return this.#req(`/api/session/${enc(id)}/revert/stage`, {
+      method: "POST",
+      body: JSON.stringify({ messageID }),
+    });
+  }
+  unrevert(id) {
+    return this.#req(`/api/session/${enc(id)}/revert`, { method: "DELETE" });
+  }
+  commitRevert(id) {
+    return this.#req(`/api/session/${enc(id)}/revert/commit`, { method: "POST" });
+  }
 
   // Translate v2 events into the v1 event names the brain already understands.
   async stream(onEvent, { signal } = {}) {
@@ -401,6 +433,11 @@ export class OpenCodeV2Client {
         }
         case "session.renamed":
           return onEvent({ type: "session.updated", properties: { info: { id: sid, title: d.title } } });
+        case "session.revert.staged":
+          return onEvent({ type: "session.updated", properties: { info: { id: sid, revert: d.revert ?? null } } });
+        case "session.revert.cleared":
+        case "session.revert.committed":
+          return onEvent({ type: "session.updated", properties: { info: { id: sid, revert: null } } });
         case "session.usage.updated":
           return onEvent({ type: "session.updated", properties: { info: { id: sid, cost: d.cost, tokens: d.tokens } } });
         case "session.execution.started":

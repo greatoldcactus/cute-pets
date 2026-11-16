@@ -142,6 +142,8 @@ try {
   check(state.servers.some((s) => s.online), "attached server is offline");
   console.log("servers:", state.servers.map((s) => `${s.url} ${s.online ? "online" : "offline"}`).join(", "));
   console.log("sessions before:", state.sessions.length);
+  check(state.stats && typeof state.stats.sessions === "number", "aggregate stats missing from /api/state");
+  console.log("aggregate sessions:", state.stats.sessions);
 
   // --- happy path ---------------------------------------------------------
   const title = `cute-pets smoke ${new Date().toISOString().slice(11, 19)}`;
@@ -167,6 +169,25 @@ try {
 
   console.log("assistant text:", JSON.stringify(text));
   console.log("tokens:", rec.tokens, "state:", rec.state, "title:", rec.title);
+
+  // --- /btw side question -------------------------------------------------
+  const beforeBtw = await get(
+    brainUrl,
+    `/api/messages?server=${encodeURIComponent(server)}&sessionId=${encodeURIComponent(sessionId)}&limit=20`,
+  );
+  const btw = await post(brainUrl, "/api/session/action", {
+    server,
+    sessionId,
+    action: "btw",
+    value: { text: "What changed?" },
+  });
+  check(btw.text === "A concise side answer.", `unexpected /btw answer: ${JSON.stringify(btw.text)}`);
+  const afterBtw = await get(
+    brainUrl,
+    `/api/messages?server=${encodeURIComponent(server)}&sessionId=${encodeURIComponent(sessionId)}&limit=20`,
+  );
+  check(afterBtw.length === beforeBtw.length, "/btw appended to the session history");
+  console.log("btw:", btw.text);
 
   // --- plan hand-off ------------------------------------------------------
   // The chat's "implement" strip appears when a plan turn finishes, then
@@ -198,6 +219,97 @@ try {
   check(built.rec.agent === "build", `hand-off did not switch to build: ${built.rec.agent}`);
   check(built.rec.planReady === false, "plan-ready flag survived the hand-off");
   console.log("plan hand-off:", plan.sessionId, "->", built.rec.agent);
+
+  // --- plan readiness backfill on attach ---------------------------------
+  // A plan that finished before the brain attached has no live busy -> idle
+  // transition. The brain reconstructs readiness from the last assistant
+  // message's agent, which OpenCode stores.
+  const backfillPort = await freePort();
+  const backfillUrl = `http://127.0.0.1:${backfillPort}`;
+  await startFake(backfillPort);
+  const seeded = await post(backfillUrl, "/api/session", {
+    title: "cute-pets smoke backfill",
+    agent: "plan",
+  });
+  const seededId = seeded.data.id;
+  await post(backfillUrl, `/api/session/${encodeURIComponent(seededId)}/prompt`, {
+    text: "Plan the work",
+  });
+  await sleep(1900); // the fake finishes the turn after 1.5s
+  await post(brainUrl, "/api/attach", { url: backfillUrl });
+  const backfilled = await waitForSession(brainUrl, seededId);
+  check(backfilled.rec.agent === "plan", `backfill session agent: ${backfilled.rec.agent}`);
+  check(backfilled.rec.planReady === true, "an idle plan session was not backfilled as plan-ready");
+  check(
+    backfilled.rec.lastText.toLowerCase().includes("alive"),
+    `backfill text missing: ${JSON.stringify(backfilled.rec.lastText)}`,
+  );
+  console.log("plan backfill:", seededId, "-> planReady");
+
+  // --- fork from a message + edit/revert ---------------------------------
+  const parentMsgs = await get(
+    brainUrl,
+    `/api/messages?server=${encodeURIComponent(fakeUrl)}&sessionId=${encodeURIComponent(plan.sessionId)}&limit=20`,
+  );
+  const parentUsers = parentMsgs.filter((m) => m.role === "user");
+  check(parentUsers.length >= 2, "plan session did not keep both user messages");
+  const forkBefore = parentUsers[1];
+  const forked = await post(brainUrl, "/api/session/action", {
+    server: fakeUrl,
+    sessionId: plan.sessionId,
+    action: "fork",
+    value: { before: forkBefore.id },
+  });
+  check(forked.sessionId && forked.sessionId !== plan.sessionId, "fork did not return a child");
+  const childMsgs = await get(
+    brainUrl,
+    `/api/messages?server=${encodeURIComponent(fakeUrl)}&sessionId=${encodeURIComponent(forked.sessionId)}&limit=20`,
+  );
+  const childText = childMsgs
+    .filter((m) => m.role === "user")
+    .map((m) => m.parts.filter((p) => p.type === "text").map((p) => p.text).join(""))
+    .join("\n");
+  check(childText.includes("Make a plan"), `fork lost the earlier prompt: ${JSON.stringify(childText)}`);
+  check(!childText.includes("Implement the plan."), "fork copied the message it forked before");
+  console.log("fork before:", forkBefore.id.slice(0, 12), "->", forked.sessionId);
+
+  await post(brainUrl, "/api/session/action", {
+    server: fakeUrl,
+    sessionId: plan.sessionId,
+    action: "revert",
+    value: { messageID: parentUsers[0].id },
+  });
+  let revertState = await get(brainUrl, "/api/state");
+  let revertRec = revertState.sessions.find((s) => s.id === plan.sessionId);
+  check(revertRec?.revert?.messageID === parentUsers[0].id, "revert was not exposed on the session");
+  await post(brainUrl, "/api/prompt", {
+    server: fakeUrl,
+    sessionId: plan.sessionId,
+    newSession: false,
+    text: "Replacement",
+  });
+  const replaced = await waitForSession(brainUrl, plan.sessionId);
+  check(replaced.rec.revert == null, "the replacement prompt did not commit the staged revert");
+  console.log("edit revert committed:", plan.sessionId);
+
+  // --- hide from pet keeps the session in the list -----------------------
+  await post(brainUrl, "/api/session/hide", {
+    server: fakeUrl,
+    sessionId: plan.sessionId,
+    hidden: true,
+  });
+  let hiddenState = await get(brainUrl, "/api/state");
+  let hiddenRec = hiddenState.sessions.find((s) => s.id === plan.sessionId);
+  check(hiddenRec?.petHidden === true, "the hidden session disappeared from the session list");
+  check(
+    hiddenState.pet.total === hiddenState.sessions.filter((s) => !s.petHidden).length,
+    "the pet counted a pet-hidden session",
+  );
+  await post(brainUrl, "/api/session/hide", { sessionId: plan.sessionId, hidden: false });
+  hiddenState = await get(brainUrl, "/api/state");
+  hiddenRec = hiddenState.sessions.find((s) => s.id === plan.sessionId);
+  check(hiddenRec?.petHidden === false, "unhide did not clear petHidden");
+  console.log("pet hide/unhide:", plan.sessionId);
 
   // --- quota failure ------------------------------------------------------
   const failPort = await freePort();
