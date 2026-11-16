@@ -18,8 +18,10 @@ const { FULL, PET, MARGIN } = require("./sizes.cjs");
 let PANEL_W = FULL.width; // preferred width; config.panelWidth / left-edge drag
 const PANEL_MIN_W = 460;
 const PANEL_MAX_W = 1200;
-const PANEL_MAX_H = 574;
+let PANEL_H = 574; // preferred height; config.panelHeight / outer-edge drag
+const PANEL_DEFAULT_H = 574;
 const PANEL_MIN_H = 340;
+const PANEL_MAX_H = 1200;
 const PANEL_GAP = 6;
 const BUBBLE_GAP = 2;
 const MIN_VISIBLE = 40; // px of the pet/window that must stay on a real display
@@ -32,12 +34,16 @@ let panelPending = null; // command queued until the panel page finishes loading
 let bubbleSize = { width: 0, height: 0 };
 let grab = null;
 let panelGrab = null;
+let panelBelow = false;
 
 // The pet window is a fixed size; move it without ever resizing it.
 function place(bounds, { save = false, panel = false } = {}) {
   petWin.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: PET.width, height: PET.height }, false);
   positionBubbles();
-  if (panel && panelOpen && panelWin && !panelWin.isDestroyed()) panelWin.setBounds(panelPlacement(), false);
+  if (panel && panelOpen && panelWin && !panelWin.isDestroyed()) {
+    panelWin.setBounds(panelPlacement(), false);
+    sendPanelSide();
+  }
   if (save) rememberPosition();
 }
 
@@ -93,7 +99,10 @@ function clampPetWindow(x, y, pet) {
 }
 
 function repositionPanel() {
-  if (panelOpen && panelWin && !panelWin.isDestroyed()) panelWin.setBounds(panelPlacement(), false);
+  if (panelOpen && panelWin && !panelWin.isDestroyed()) {
+    panelWin.setBounds(panelPlacement(), false);
+    sendPanelSide();
+  }
 }
 
 function rememberPosition() {
@@ -175,6 +184,11 @@ config.panelWidth = Number.isFinite(savedPanelWidth) && savedPanelWidth > 0
   ? Math.max(PANEL_MIN_W, Math.min(PANEL_MAX_W, Math.round(savedPanelWidth)))
   : FULL.width;
 PANEL_W = config.panelWidth;
+const savedPanelHeight = Number(config.panelHeight);
+config.panelHeight = Number.isFinite(savedPanelHeight) && savedPanelHeight > 0
+  ? Math.max(PANEL_MIN_H, Math.min(PANEL_MAX_H, Math.round(savedPanelHeight)))
+  : PANEL_DEFAULT_H;
+PANEL_H = config.panelHeight;
 
 // ---- placement ----------------------------------------------------------
 function workArea(win) {
@@ -185,6 +199,15 @@ function workArea(win) {
 // window to the work area instead of letting it run off the left edge.
 function panelWidth(area) {
   return Math.max(1, Math.min(PANEL_W, area.width - 2 * MARGIN));
+}
+
+// Preferred height, capped to the display. Placement still chooses the side
+// from the available room; the preferred height only decides how tall it gets.
+function maxPanelHeight(area) {
+  return Math.max(1, Math.min(PANEL_MAX_H, area.height - 2 * MARGIN));
+}
+function panelHeight(area) {
+  return Math.max(1, Math.min(PANEL_H, area.height - 2 * MARGIN));
 }
 
 // The bubbles hug the sprite's top-right corner. Their window is sized by the
@@ -221,18 +244,21 @@ function panelPlacement() {
   const roomAbove = top - area.y - 10;
   const roomBelow = area.y + area.height - bottom - 10;
 
+  const desired = panelHeight(area);
   let below = false;
-  let height = PANEL_MAX_H;
-  if (roomAbove >= PANEL_MAX_H) height = PANEL_MAX_H;
-  else if (roomAbove >= PANEL_MIN_H) height = roomAbove;
-  else if (roomBelow >= PANEL_MAX_H) { below = true; height = PANEL_MAX_H; }
-  else if (roomBelow >= PANEL_MIN_H) { below = true; height = roomBelow; }
-  else {
+  let height;
+  if (roomAbove >= PANEL_MIN_H) {
+    height = Math.min(desired, roomAbove);
+  } else if (roomBelow >= PANEL_MIN_H) {
+    below = true;
+    height = Math.min(desired, roomBelow);
+  } else {
     below = roomBelow > roomAbove;
-    height = Math.max(220, Math.min(PANEL_MAX_H, Math.max(roomAbove, roomBelow)));
+    height = Math.max(220, Math.min(desired, Math.max(roomAbove, roomBelow)));
   }
 
   const width = panelWidth(area);
+  panelBelow = below;
   const x = Math.max(area.x, Math.min(right - width, area.x + area.width - width));
   let y = below ? bottom + PANEL_GAP : top - height - PANEL_GAP;
   y = Math.max(area.y, Math.min(y, area.y + area.height - height));
@@ -248,12 +274,21 @@ function miniPlacement(height) {
   const top = b.y;
   const bottom = b.y + b.height;
   const width = panelWidth(area);
-  const h = Math.max(120, Math.min(PANEL_MAX_H, Math.round(height)));
+  const h = Math.max(120, Math.min(maxPanelHeight(area), Math.round(height)));
   const x = Math.max(area.x, Math.min(right - width, area.x + area.width - width));
   let y = top - h - PANEL_GAP;
   if (y < area.y) y = bottom + PANEL_GAP;
   y = Math.max(area.y, Math.min(y, area.y + area.height - h));
   return { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: h };
+}
+
+function panelSide() {
+  return panelBelow ? "below" : "above";
+}
+
+function sendPanelSide() {
+  if (!panelWin || panelWin.isDestroyed() || panelWin.webContents.isLoadingMainFrame()) return;
+  panelWin.webContents.send("cp:panel-side", { side: panelSide() });
 }
 
 function sendPanelCommand(cmd) {
@@ -266,6 +301,7 @@ function showPanel(cmd = {}) {
   if (!panelWin || panelWin.isDestroyed()) return;
   panelWin.setBounds(panelPlacement(), false);
   panelOpen = true;
+  sendPanelSide();
   if (!panelWin.isVisible()) panelWin.show();
   else panelWin.focus();
   sendPanelCommand({
@@ -413,7 +449,7 @@ app.whenReady().then(() => {
 
   panelWin = new BrowserWindow({
     width: panelWidth(screen.getPrimaryDisplay().workArea),
-    height: PANEL_MAX_H,
+    height: panelHeight(screen.getPrimaryDisplay().workArea),
     show: false,
     transparent: true,
     frame: false,
@@ -464,40 +500,113 @@ app.whenReady().then(() => {
     if (!panelOpen || !panelWin || panelWin.isDestroyed()) return;
     if (info && info.full) panelWin.setBounds(panelPlacement(), false);
     else if (info && info.height) panelWin.setBounds(miniPlacement(info.height), false);
+    sendPanelSide();
   });
-  // Left-edge resize: the renderer reports global cursor X. The shell keeps the
-  // panel's right edge pinned and remembers the chosen width on release.
+  // Edge resize: the renderer reports global cursor coords. The dragged edge
+  // follows the cursor while the opposite edge stays pinned; a corner moves both
+  // dimensions at once.
   ipcMain.on("cp:panel-resize", (_e, info) => {
     if (!panelOpen || !panelWin || panelWin.isDestroyed()) return;
     if (info?.phase === "begin") {
-      const b = panelWin.getBounds();
-      panelGrab = { startX: info.x, right: b.x + b.width, y: b.y, height: b.height, width: b.width };
+      const bounds = panelWin.getBounds();
+      const pet = petWin && !petWin.isDestroyed() ? petWin.getBounds() : null;
+      // The edge that faces the pet pushes it instead of covering it.
+      const inner = pet && bounds.y + bounds.height <= pet.y + 1 ? "bottom" : "top";
+      panelGrab = { edge: info.edge || "left", x: info.x, y: info.y, bounds, inner };
       return;
     }
     if (!panelGrab) return;
     if (info?.phase === "move") {
       const area = workArea(panelWin);
-      const wanted = panelGrab.width + (panelGrab.startX - info.x);
-      let width = Math.max(PANEL_MIN_W, Math.min(PANEL_MAX_W, Math.round(wanted)));
-      width = Math.max(1, Math.min(width, area.width - 2 * MARGIN));
-      let x = panelGrab.right - width;
-      if (x < area.x) {
-        width = Math.max(1, panelGrab.right - area.x);
-        x = area.x;
+      const b = panelGrab.bounds;
+      const edge = panelGrab.edge;
+      let x = b.x, y = b.y, width = b.width, height = b.height;
+      if (edge.includes("left") || edge.includes("right")) {
+        const right0 = b.x + b.width;
+        const delta = edge.includes("left") ? panelGrab.x - info.x : info.x - panelGrab.x;
+        const wanted = b.width + delta;
+        let w = Math.max(PANEL_MIN_W, Math.min(PANEL_MAX_W, Math.round(wanted)));
+        w = Math.max(1, Math.min(w, area.width - 2 * MARGIN));
+        if (edge.includes("left")) {
+          let nx = right0 - w;
+          if (nx < area.x) {
+            w = Math.max(1, right0 - area.x);
+            nx = area.x;
+          }
+          if (nx + w > area.x + area.width) w = Math.max(1, area.x + area.width - nx);
+          x = Math.round(nx);
+        } else {
+          w = Math.max(1, Math.min(w, area.x + area.width - b.x));
+        }
+        width = Math.round(w);
       }
-      if (x + width > area.x + area.width) width = Math.max(1, area.x + area.width - x);
-      panelWin.setBounds({
-        x: Math.round(x),
-        y: panelGrab.y,
-        width: Math.round(width),
-        height: panelGrab.height,
-      }, false);
+      if (edge.includes("top") || edge.includes("bottom")) {
+        const maxH = maxPanelHeight(area);
+        const minH = Math.min(PANEL_MIN_H, maxH);
+        if (edge.includes("top")) {
+          const bottom = b.y + b.height;
+          let h = b.height + (panelGrab.y - info.y);
+          h = Math.max(minH, Math.min(maxH, h));
+          h = Math.max(1, Math.min(h, bottom - area.y));
+          h = Math.round(h);
+          y = bottom - h;
+          height = h;
+        } else {
+          const top = b.y;
+          let h = b.height + (info.y - panelGrab.y);
+          h = Math.max(minH, Math.min(maxH, h));
+          h = Math.max(1, Math.min(h, area.y + area.height - top));
+          h = Math.round(h);
+          height = h;
+        }
+      }
+      // Resizing toward the pet pushes it along, keeping the gap. The pet is
+      // clamped to the work area; once it cannot move, the panel stops too.
+      const pet = petWin && !petWin.isDestroyed() ? petWin.getBounds() : null;
+      if (pet && panelGrab.inner && edge.includes(panelGrab.inner)) {
+        if (panelGrab.inner === "bottom") {
+          const maxPetY = area.y + area.height - PET.height;
+          const maxBottom = maxPetY - PANEL_GAP;
+          if (y + height > maxBottom) height = Math.max(1, Math.round(maxBottom - y));
+          const wantY = y + height + PANEL_GAP;
+          if (wantY > pet.y) {
+            petWin.setBounds({
+              x: pet.x,
+              y: Math.round(Math.min(wantY, maxPetY)),
+              width: PET.width,
+              height: PET.height,
+            }, false);
+          }
+        } else {
+          const minTop = area.y + PET.height + PANEL_GAP;
+          if (y < minTop) {
+            const bottom = y + height;
+            y = minTop;
+            height = Math.max(1, Math.round(bottom - minTop));
+          }
+          const wantY = y - PANEL_GAP - PET.height;
+          if (wantY < pet.y) {
+            petWin.setBounds({
+              x: pet.x,
+              y: Math.round(Math.max(wantY, area.y)),
+              width: PET.width,
+              height: PET.height,
+            }, false);
+          }
+        }
+      }
+      panelWin.setBounds({ x, y, width, height }, false);
+      sendPanelSide();
       return;
     }
     if (info?.phase === "end") {
-      PANEL_W = panelWin.getBounds().width;
+      const b = panelWin.getBounds();
+      PANEL_W = b.width;
+      PANEL_H = b.height;
       config.panelWidth = PANEL_W;
-      saveConfig({ ...readConfig(), panelWidth: PANEL_W });
+      config.panelHeight = PANEL_H;
+      saveConfig({ ...readConfig(), panelWidth: PANEL_W, panelHeight: PANEL_H });
+      rememberPosition(); // the pet may have been pushed by the resize
       panelGrab = null;
     }
   });
@@ -580,6 +689,16 @@ app.whenReady().then(() => {
     }
   });
 
+  // UI scale lives in the renderer's localStorage; the shell only fans a change
+  // out to the other text surfaces. The panel applies it locally.
+  ipcMain.on("cp:ui-scale", (_e, scale) => {
+    const n = Number(scale);
+    if (!Number.isFinite(n)) return;
+    for (const w of [bubbleWin, petWin]) {
+      if (w && !w.isDestroyed()) w.webContents.send("cp:ui-scale", n);
+    }
+  });
+
   // Manual dragging: the renderer reports global cursor coords, the main process
   // moves the window. Keeps click-to-open working (a click is a drag of <4px).
   ipcMain.on("cp:drag-begin", (_e, p) => {
@@ -620,6 +739,7 @@ app.whenReady().then(() => {
       panelWin.webContents.send("cp:panel-command", panelPending);
       panelPending = null;
     }
+    sendPanelSide();
   });
   // after the bubbles page loads it reports its size; if the panel is open it
   // stays hidden, otherwise it appears on its own
