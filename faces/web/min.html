@@ -788,28 +788,29 @@ function needLabel(s){
 function renderBubbles(){
   const visible=state.sessions.filter(s=>!s.petHidden);
   const act=visible.filter(s=>s.state!=="idle").slice(0,3);
-  // A finished plan is a pending decision, so it gets the attention-style
-  // violet bubble and is not subject to the finished-history limit below.
-  const ready=visible.filter(isPlanReady).slice(0,2);
-  // Sessions that finished while the pet was running keep a bubble until they are
-  // hidden (or fall out of the list of the last few).
-  const shown=new Set([...act,...ready].map(s=>s.id));
-  const done=finishedIds.map(id=>state.sessions.find(s=>s.id===id))
-    .filter(s=>s&&!shown.has(s.id)&&!s.petHidden).slice(-2);
+  // Finished plans and finished turns are both just idle sessions, so they
+  // share one stream ordered by the same last-update key as the session list.
+  const shown=new Set(act.map(s=>s.id));
+  const idle=[...visible.filter(isPlanReady),
+      ...finishedIds.map(id=>state.sessions.find(s=>s.id===id)).filter(Boolean)]
+    .filter((s,i,arr)=>s.state==="idle"&&!s.petHidden&&!shown.has(s.id)&&
+      arr.findIndex(x=>x.id===s.id)===i)
+    .sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0))
+    .slice(0,4);
   // Streaming text changes state.sessions constantly, but nothing in this stack
   // depends on it. Rebuilding identical markup would still replace the hovered
   // button; the browser then retargets the click to the container and the click
   // is lost.
   const sig=JSON.stringify([act.map(s=>[s.id,s.state,s.agent||"",s.title,(s.forms||[]).length,(s.pending||[]).length]),
-    ready.map(s=>[s.id,s.title]),
-    done.map(s=>[s.id,s.title])]);
+    idle.map(s=>[s.id,s.title,isPlanReady(s)])]);
   if(sig===bubbleSig) return;
   bubbleSig=sig;
   $("#bubbles").innerHTML=[...act.map(s=>{ const need=needLabel(s); return `<button class="bub ${s.state}${s.agent==="plan"?" plan":""}" data-session="${esc(s.id)}" aria-label="${esc(s.title)}${need?` — ${need}`:""}">
       <i></i>${need?`<b class="need">${need}</b>`:""}<span>${esc(s.title)}</span></button>`; }),
-    ...ready.map(s=>`<button class="bub planready" data-session="${esc(s.id)}" aria-label="${esc(s.title)} — plan ready" title="plan ready - click to review">
-      <i></i><b class="need">plan ready</b><span>${esc(s.title)}</span></button>`),
-    ...done.map(s=>`<button class="bub done" data-session="${esc(s.id)}" title="finished - right-click to hide">
+    ...idle.map(s=>isPlanReady(s)
+      ? `<button class="bub planready" data-session="${esc(s.id)}" aria-label="${esc(s.title)} — plan ready" title="plan ready - click to review">
+      <i></i><b class="need">plan ready</b><span>${esc(s.title)}</span></button>`
+      : `<button class="bub done" data-session="${esc(s.id)}" title="finished - right-click to hide">
       <i></i><span>&#10003; ${esc(s.title)}</span></button>`)].join("");
   syncBubbleSize();
 }
@@ -1659,10 +1660,13 @@ function render(){
     prevStates.set(s.id,s.state);
   }
   for(const k of [...prevStates.keys()]) if(!live.has(k)) prevStates.delete(k);
-  if(!firstRender){
+  // Seed once, after the first real snapshot arrives: the face renders once
+  // with an empty state before the event stream connects.
+  if(!firstRender && state.sessions.length){
     firstRender=true;
-    // Seed with what finished shortly before the face started, oldest first so
-    // the newest sits at the bottom like a live finish would.
+    // Seed the finished-history queue with what finished shortly before the
+    // face started, oldest first so the queue cap drops the oldest; the stack
+    // itself is sorted by updatedAt when rendered.
     const recent=state.sessions.filter(s=>s.state==="idle"&&!isPlanReady(s)&&s.lastText&&Date.now()-(s.updatedAt||0)<15*60*1000)
       .sort((a,b)=>b.updatedAt-a.updatedAt).slice(0,2).reverse().map(s=>s.id);
     finishedIds=[...new Set([...finishedIds,...recent])].slice(-4);

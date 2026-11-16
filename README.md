@@ -124,8 +124,8 @@ read-only `plan` agent. The pet turns violet, uses the spritesheet's review row 
 with a violet aura. A question asked while planning still shows the amber **answer** badge
 and pulse, so the violet mode never hides that the agent is blocked on you. When a plan
 finishes it keeps a violet **plan ready** bubble in the answer style — solid, badged and
-glowing instead of the normal ✓ — and it stays until you implement or hide it rather than
-falling off with the finished bubbles. Readiness comes from the last completed assistant
+glowing instead of the normal ✓ — and joins the idle bubbles in last-update order. Readiness
+comes from the last completed assistant
 message's agent, so a plan that finished before a brain restart is reconstructed from
 OpenCode's history. An open chat shows a violet **plan ready** strip
 above the composer with a small **implement** button.
@@ -143,10 +143,11 @@ required fields and external-link acknowledgements. Answers are posted back to t
 session through the brain, the form disappears and the session resumes.
 
 **Finished work stays visible.** When a session ends while the pet is running it keeps a
-dashed bubble with a ✓ (the two most recent, newest nearest the pet), so you can see what
-just completed and open it — it leaves the pet only when you hide it, and a restart seeds
-the bubbles with anything that finished in the last 15 minutes. A new bubble is appended to
-the stack rather than pushing the others down, so the one you were about to click stays put.
+dashed bubble with a ✓, so you can see what just completed and open it — it leaves the pet
+only when you hide it, and a restart seeds the bubbles with anything that finished in the
+last 15 minutes. Active bubbles stay above idle ones; finished bubbles and plan-ready
+bubbles share one idle stream ordered by their last update (newest first), matching the
+sessions list.
 
 **Approvals** — permission requests are rendered as buttons: *once*, *always*, *reject*.
 Answered from the pet, the TUI never has to be found.

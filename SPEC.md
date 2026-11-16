@@ -176,7 +176,8 @@ waiting amber (`#ffc65c`), error red (`#ff6b6b`), plan violet (`#a78bfa`). Plan 
 the waiting/error pose when it needs attention, but uses the violet aura; its bubble still
 shows the amber waiting badge/dot. A finished plan (idle with `planReady`) keeps a violet
 plan-ready bubble in the waiting bubble's badge/glow style until the next turn, an error,
-an agent change or hide; it is not subject to the finished-bubble limit. The whole aura
+an agent change or hide; it shares the idle-bubble stream with finished work, ordered by
+`updatedAt`. The whole aura
 layer is gated by the shell config `auras` (Settings → Auras).
 
 Codex V2 sheets use `0 idle, 1 running-right, 2 running-left, 3 waving, 4 jumping,
