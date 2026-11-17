@@ -143,6 +143,8 @@ trace preview and clears it when the session becomes idle.
 - `POST /api/permission` — `{id, reply}`
 - `POST /api/form` — `{server, sessionId, formId, answer}`; answers a v2 agent question
   and returns `{ok:true}`
+- `POST /api/form/cancel` — `{server, sessionId, formId, message?}`; cancels a pending
+  question (the optional reason goes to the agent) and returns `{ok:true}`
 - `POST /api/session/action` — `{sessionId, action, value}`; includes `move` (v2),
   `fork` (`value:{before: messageID}` for a message boundary, omitted for the full
   session), `rename` (`value:{title}`), `btw` (`value:{text}` → `{text}` from the
@@ -289,7 +291,8 @@ Wayland may still refuse programmatic positioning; the shell's XWayland mode is 
   `string` (optionally with `options`/`custom`), `number`, `integer`, `boolean`,
   `multiselect` and `external`; the answer is `{key: value}` and an external field must be
   acknowledged with `true`. The brain fetches forms per session directory, turns a
-  pending form into `waiting`, and exposes the answer route as `POST /api/form`.
+  pending form into `waiting`, and exposes the answer and cancel routes as
+  `POST /api/form` and `POST /api/form/cancel`.
 - **Plan mode uses a synthetic reminder.** Creating a session with the `plan` agent (or
   switching to or from it) enqueues a `synthetic` message with `delivery:"steer"` and
   `resume:false` containing the Plan-mode reminder. It does not start a turn by itself:

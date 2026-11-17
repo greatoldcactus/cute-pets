@@ -1070,7 +1070,7 @@ function renderDetail(){
     : view==="pets" ? "Pets" : view==="settings" ? "Settings"
     : d ? (isPlan?"New plan chat":"New chat") : s?s.title:"Nothing selected";
   // The stop button changes the space available, so update it before measuring.
-  $("#dabort").style.display = s&&s.state==="running" ? "" : "none";
+  $("#dabort").style.display = s&&(s.state==="running"||s.state==="waiting") ? "" : "none";
   $("#dshow").style.display = s&&s.petHidden ? "" : "none";
   fitLabel($("#dtitle"),title);
   const dirName = d?.directory ? d.directory.split(/[\\/]/).filter(Boolean).pop() : "";
@@ -1571,7 +1571,8 @@ function formHtml(form){
   return `<div class="formcard${plan?" plan":""}" data-formcard="${esc(form.id)}">
     <div class="ft">${esc(form.title||"The agent has a question")}</div>
     ${fields.map(x=>formFieldHtml(form.id,x,vals)).join("")}
-    <div class="btnrow"><button class="pbtn ok" data-form-send="${esc(form.id)}">Answer</button></div>
+    <div class="btnrow"><button class="pbtn ok" data-form-send="${esc(form.id)}">Answer</button>
+      <button class="pbtn" data-form-cancel="${esc(form.id)}" title="Cancel this question and let the session continue">Skip</button></div>
   </div>`;
 }
 function renderForms(force=false){
@@ -1637,6 +1638,20 @@ async function sendForm(formId){
   }
   try{
     await post("/api/form",{server:s.server,sessionId:s.id,formId,answer});
+    s.forms=(s.forms||[]).filter(x=>x.id!==formId);
+    if(state.forms) state.forms=state.forms.filter(x=>x.id!==formId);
+    delete formDrafts[formId];
+    formSig=""; renderForms(true);
+  }catch(e){ alert(String(e)); }
+}
+async function cancelForm(formId){
+  const s=currentSession(); if(!s) return;
+  const form=(s.forms||[]).find(f=>f.id===formId); if(!form) return;
+  try{
+    await post("/api/form/cancel",{
+      server:s.server, sessionId:s.id, formId,
+      message:"The user skipped this question.",
+    });
     s.forms=(s.forms||[]).filter(x=>x.id!==formId);
     if(state.forms) state.forms=state.forms.filter(x=>x.id!==formId);
     delete formDrafts[formId];
@@ -1721,6 +1736,8 @@ document.addEventListener("click",async e=>{
   if(perm){ try{ await post("/api/permission",{id:perm.dataset.perm,reply:perm.dataset.reply}); }catch(err){} return; }
   const send=e.target.closest("[data-form-send]");
   if(send){ await sendForm(send.dataset.formSend); return; }
+  const fskip=e.target.closest("[data-form-cancel]");
+  if(fskip){ await cancelForm(fskip.dataset.formCancel); return; }
   const qcancel=e.target.closest("[data-queue-cancel]");
   if(qcancel){
     const s=currentSession(); if(!s) return;

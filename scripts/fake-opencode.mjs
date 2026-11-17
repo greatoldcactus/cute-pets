@@ -15,6 +15,7 @@ const directory = path.resolve(args.directory ?? process.cwd());
 
 const sessions = new Map(); // id -> session
 const messages = new Map(); // id -> message[]
+const forms = new Map(); // id -> pending question
 const clients = new Set(); // open SSE responses
 
 const now = () => Date.now();
@@ -199,7 +200,19 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === "GET /api/permission/request") return json(res, 200, { data: [] });
-    if (route === "GET /api/form") return json(res, 200, { data: [] });
+    if (route === "GET /api/form") return json(res, 200, { data: [...forms.values()] });
+    if (route === "POST /api/test/form") {
+      const body = await readBody(req);
+      const form = {
+        id: newID("form"),
+        sessionID: body.sessionID,
+        title: "Pick a color",
+        fields: [{ key: "color", title: "Color", type: "string", required: true }],
+      };
+      forms.set(form.id, form);
+      broadcast("form.created", { form });
+      return json(res, 200, { data: form });
+    }
     if (route === "GET /api/model") {
       return json(res, 200, {
         data: [{ providerID: "fake", modelID: "fake-1", name: "Fake", default: true, cost: [] }],
@@ -243,6 +256,30 @@ const server = http.createServer(async (req, res) => {
       if (step === "commit" && req.method === "POST") {
         session.revert = null;
         broadcast("session.revert.committed", { sessionID: session.id });
+        res.writeHead(204);
+        return res.end();
+      }
+      return json(res, 404, { error: "not found", route });
+    }
+
+    const formRoute = url.pathname.match(/^\/api\/session\/([^/]+)\/form\/([^/]+)(?:\/reply)?$/);
+    if (formRoute) {
+      const [, sid, fid, reply] = formRoute;
+      const form = forms.get(fid);
+      if (!form || form.sessionID !== sid) return json(res, 404, { error: "form not found" });
+      if (reply && req.method === "POST") {
+        forms.delete(fid);
+        broadcast("form.replied", { id: fid, sessionID: sid });
+        res.writeHead(204);
+        return res.end();
+      }
+      if (!reply && req.method === "DELETE") {
+        forms.delete(fid);
+        broadcast("form.cancelled", {
+          id: fid,
+          sessionID: sid,
+          message: url.searchParams.get("message") || null,
+        });
         res.writeHead(204);
         return res.end();
       }

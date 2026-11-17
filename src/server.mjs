@@ -278,6 +278,17 @@ export function startServer({ port, host, store, api }) {
         return json(res, 200, out);
       }
 
+      if (route === "POST /api/form/cancel") {
+        const body = await readBody(req);
+        const out = await api.cancelForm({
+          server: body.server ?? null,
+          sessionId: body.sessionId,
+          formId: body.formId,
+          message: body.message ?? null,
+        });
+        return json(res, 200, out);
+      }
+
       if (route === "GET /api/messages") {
         const server = url.searchParams.get("server");
         const sessionId = url.searchParams.get("sessionId");

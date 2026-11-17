@@ -364,6 +364,32 @@ try {
   check(!goneState.hidden.some((h) => h.id === plan.sessionId), "the deleted session is still hidden");
   console.log("delete session:", plan.sessionId);
 
+  // --- skipping a pending question ---------------------------------------
+  const madeForm = await post(fakeUrl, "/api/test/form", { sessionID: sessionId });
+  const formId = madeForm.data?.id;
+  check(formId, "fake form was not created");
+  const withForm = await waitForState(
+    brainUrl,
+    (s) => (s.sessions.find((x) => x.id === sessionId)?.forms ?? []).some((f) => f.id === formId),
+    "the pending form did not reach the state",
+  );
+  check(
+    withForm.sessions.find((s) => s.id === sessionId)?.state === "waiting",
+    "a pending form did not put the session in waiting",
+  );
+  await post(brainUrl, "/api/form/cancel", {
+    server: fakeUrl,
+    sessionId,
+    formId,
+    message: "The user skipped this question.",
+  });
+  await waitForState(
+    brainUrl,
+    (s) => !(s.sessions.find((x) => x.id === sessionId)?.forms ?? []).some((f) => f.id === formId),
+    "the cancelled form stayed pending",
+  );
+  console.log("form cancel:", formId);
+
   // --- quota failure ------------------------------------------------------
   const failPort = await freePort();
   const failUrl = `http://127.0.0.1:${failPort}`;

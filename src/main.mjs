@@ -1019,6 +1019,19 @@ class Hub {
     return { ok: true };
   }
 
+  // Decline a pending question without answering it. The session is no longer
+  // blocked on the form; the agent receives the optional reason.
+  async cancelForm({ server, sessionId, formId, message = null }) {
+    const found = this.store.forms.get(formId);
+    const url = found ? found[0].split("::")[0] : this.pickServer(server);
+    const entry = url && this.clients.get(url);
+    if (!entry || !sessionId || !formId) throw new Error("server, sessionId and formId required");
+    if (typeof entry.client.cancelForm !== "function") throw new Error("cancelling questions needs OpenCode 2");
+    await entry.client.cancelForm(sessionId, formId, message);
+    this.store.removeForm(formId);
+    return { ok: true };
+  }
+
   async cancelInbox({ server, sessionId, inboxId }) {
     const url = this.pickServer(server);
     const entry = url && this.clients.get(url);

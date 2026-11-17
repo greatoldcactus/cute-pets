@@ -131,6 +131,13 @@ export class OpenCodeV2Client {
     });
   }
 
+  // Cancel a pending question. OpenCode lets the asker carry an optional reason
+  // so the agent can react to the refusal instead of waiting forever.
+  cancelForm(sessionId, formId, message = null) {
+    const q = message ? `?message=${enc(message)}` : "";
+    return this.#req(`/api/session/${enc(sessionId)}/form/${enc(formId)}${q}`, { method: "DELETE" });
+  }
+
   // Durable inputs waiting to be delivered. A plan session is created with, or
   // switched to/from, the plan agent: the plan plugin then enqueues a synthetic
   // mode reminder with delivery "steer" and resume:false. Seeing it lets the

@@ -143,7 +143,9 @@ keeps its idle frame; the violet aura still marks the mode.
 becomes `waiting` and a compact form card appears above the composer. It supports text,
 number/integer, boolean, multiselect and option strings, conditional fields (`when`),
 required fields and external-link acknowledgements. Answers are posted back to the
-session through the brain, the form disappears and the session resumes.
+session through the brain, the form disappears and the session resumes. **Skip** cancels
+the question (with a short reason for the agent) instead, so a question never blocks the
+session when you do not want to answer; the header **stop** is also available while waiting.
 
 **Finished work stays visible.** When a session ends while the pet is running it keeps a
 dashed bubble with a ✓, so you can see what just completed and open it — it leaves the pet
@@ -414,6 +416,7 @@ POST /api/inbox/cancel     {server, sessionId, inboxId}   cancel an undelivered 
 POST /api/inbox/steer      {server, sessionId, inboxId}   promote queue → steer
 POST /api/permission       {id, reply: once|always|reject}
 POST /api/form             {server, sessionId, formId, answer}   answer a v2 agent question
+POST /api/form/cancel      {server, sessionId, formId, message?} decline it without answering
 POST /api/abort            {server, sessionId}
 POST /api/session/hide     {sessionId, hidden:true|false}
 POST /api/session/action   {sessionId, action: move|fork|rename|btw|revert|undo|redo|compact|share|model|agent, …}
