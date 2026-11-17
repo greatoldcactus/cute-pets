@@ -3,7 +3,15 @@
 Desktop pets for [OpenCode](https://opencode.ai) that show **real sessions** — titles,
 states, approvals and chat — instead of a decorative bubble.
 
-![cute-pets](docs/screenshot.png)
+![cute-pets: the pet with its bubbles](docs/screenshot.png)
+
+One bubble per session: a question that needs an answer, a turn in flight, a finished
+plan, an error, a done check. Nothing else on your screen.
+
+![cute-pets: the panel opens above the pet](docs/screenshot-panel.png)
+
+Click the pet and the panel opens directly above it — real sessions, their states and the
+chat — with the bubble stack out of the way.
 
 Codex Pets can do this because it *is* a client of its agent. So is cute-pets: it is a
 client of OpenCode's own HTTP+SSE server, not an MCP sink. It knows your session titles,
