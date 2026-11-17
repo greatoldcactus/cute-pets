@@ -348,6 +348,22 @@ try {
   check(hiddenRec?.petHidden === false, "unhide did not clear petHidden");
   console.log("pet hide/unhide:", plan.sessionId);
 
+  // --- deleting removes the session and its hidden marker -----------------
+  await post(brainUrl, "/api/session/hide", {
+    server: fakeUrl,
+    sessionId: plan.sessionId,
+    hidden: true,
+  });
+  const closed = await post(brainUrl, "/api/session/close", {
+    server: fakeUrl,
+    sessionId: plan.sessionId,
+  });
+  check(closed.ok, "session close failed");
+  const goneState = await get(brainUrl, "/api/state");
+  check(!goneState.sessions.some((s) => s.id === plan.sessionId), "the deleted session is still listed");
+  check(!goneState.hidden.some((h) => h.id === plan.sessionId), "the deleted session is still hidden");
+  console.log("delete session:", plan.sessionId);
+
   // --- quota failure ------------------------------------------------------
   const failPort = await freePort();
   const failUrl = `http://127.0.0.1:${failPort}`;

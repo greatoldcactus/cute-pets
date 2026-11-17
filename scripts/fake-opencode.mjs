@@ -188,6 +188,15 @@ const server = http.createServer(async (req, res) => {
       broadcast("session.created", session);
       return json(res, 200, { data: session });
     }
+    const delSession = url.pathname.match(/^\/api\/session\/([^/]+)$/);
+    if (delSession && req.method === "DELETE") {
+      const session = sessionByID(delSession[1]);
+      if (!session) return json(res, 404, { error: "session not found" });
+      sessions.delete(session.id);
+      broadcast("session.deleted", { sessionID: session.id });
+      res.writeHead(204);
+      return res.end();
+    }
 
     if (route === "GET /api/permission/request") return json(res, 200, { data: [] });
     if (route === "GET /api/form") return json(res, 200, { data: [] });

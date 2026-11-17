@@ -280,3 +280,12 @@ test("a synced idle session keeps its server end time", () => {
   assert.deepEqual(sessions.map((s) => s.id), ["a", "b"]);
   assert.deepEqual(sessions.map((s) => s.updatedAt), [2100, 1850]);
 });
+
+test("deleting a session also drops its hidden marker", () => {
+  const store = newStore();
+  store.hideSession(SERVER, "s1");
+  assert.equal(store.snapshot().sessions[0].petHidden, true);
+  store.removeSession(SERVER, "s1");
+  assert.equal(store.hiddenList().length, 0);
+  assert.equal(store.snapshot().sessions.length, 0);
+});

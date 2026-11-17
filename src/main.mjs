@@ -474,7 +474,10 @@ class Hub {
         if (p.info) this.store.upsertSession(url, p.info);
         break;
       case "session.deleted":
-        if (p.sessionID) this.store.removeSession(url, p.sessionID);
+        if (p.sessionID) {
+          this.store.removeSession(url, p.sessionID);
+          this.#saveHidden();
+        }
         break;
       case "session.status":
         if (p.sessionID && p.status) this.store.setStatus(url, p.sessionID, p.status);
@@ -974,13 +977,14 @@ class Hub {
     return { server: url, sessionId: id, session };
   }
 
-  // Destructive: removes the session in OpenCode. Not wired to any UI control.
+  // Destructive: removes the session in OpenCode. Wired to the session menus.
   async closeSession({ server, sessionId }) {
     const url = this.pickServer(server);
     const entry = url && this.clients.get(url);
     if (!entry || !sessionId) throw new Error("server and sessionId required");
     await entry.client.deleteSession(sessionId);
     this.store.removeSession(url, sessionId);
+    this.#saveHidden();
     return { ok: true };
   }
 

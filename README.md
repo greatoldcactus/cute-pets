@@ -68,7 +68,8 @@ Browser faces, if you prefer: <http://127.0.0.1:4280> (session tray) and
 5. **Right-click a session or bubble → Hide from pet** to clear finished work out of the
    way. Nothing is deleted: the session stays in OpenCode and in the sessions column; use
    the `shown / hidden / all` visibility filter there (or the chat header's *show in pet*)
-   to bring it back.
+   to bring it back. **Delete session…** (same menus, with a confirmation) removes it from
+   OpenCode for good.
 
 ---
 
@@ -231,7 +232,9 @@ column: the visibility filter defaults to `shown` and offers `hidden` and `all`;
 rows are dimmed and carry an eye-off icon. Right-click one → **Show in pet**, or use the
 chat header's **show in pet** for the selected session. Persisted in
 `~/.cute-pets/hidden.json`. The activity badge ignores pet-hidden sessions, so expand the
-sessions column (`Ctrl/Cmd+B`) to reach them when it is collapsed.
+sessions column (`Ctrl/Cmd+B`) to reach them when it is collapsed. Hiding is not deleting:
+use **Delete session…** to remove the conversation from OpenCode, which also drops its
+hidden marker.
 
 ---
 
@@ -418,7 +421,8 @@ POST /api/session/action   {sessionId, action: move|fork|rename|btw|revert|undo|
                            rename takes value:{title}
                            btw takes value:{text} and returns {text} from the session context
 POST /api/attach  /api/detach  /api/announce
-POST /api/session/close    {server, sessionId}   — deletes in OpenCode, no UI uses it
+POST /api/session/close    {server, sessionId}   — delete in OpenCode, remove from the list
+                                                 and hidden.json; confirmed in the menus
 ```
 
 ---

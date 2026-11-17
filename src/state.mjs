@@ -245,6 +245,7 @@ export class PetState {
     this.sessions.delete(keyOf(server, id));
     const key = keyOf(server, id);
     this.inbox.delete(key);
+    this.hidden.delete(id); // a deleted session must not stay in the hidden list
     for (const [pid, [k]] of this.permissions) if (k === key) this.permissions.delete(pid);
     for (const [fid, [k]] of this.forms) if (k === key) this.forms.delete(fid);
     this.touch();

@@ -137,6 +137,9 @@ trace preview and clears it when the session becomes idle.
 - `POST /api/checkdir` — `{directory, server?}` → `{ok, directory, server, wsl}`;
   validates on the brain host or its WSL UNC mount
 - `POST /api/abort` — `{server, sessionId}`
+- `POST /api/session/hide` — `{sessionId, hidden}`; pet-side only, persisted in `hidden.json`
+- `POST /api/session/close` — `{server, sessionId}`; deletes the session in OpenCode and
+  drops its hidden marker
 - `POST /api/permission` — `{id, reply}`
 - `POST /api/form` — `{server, sessionId, formId, answer}`; answers a v2 agent question
   and returns `{ok:true}`

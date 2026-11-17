@@ -388,6 +388,8 @@ box-shadow:0 16px 34px rgba(0,0,0,.65);display:none;z-index:60}
 font:inherit;font-size:calc(12px * var(--ui-scale));padding:calc(6px * var(--ui-scale)) calc(9px * var(--ui-scale));
 border-radius:calc(7px * var(--ui-scale));cursor:pointer}
 .ctx button:hover{background:#222736}
+.ctx button.danger{color:var(--err)}
+.ctx button.danger:hover{background:#2a1616}
 .ctx .sep{height:1px;background:var(--line);margin:4px 6px}
 .ctx .k{float:right;color:var(--dim);font-size:calc(10.5px * var(--ui-scale))}
 /* ---- three surfaces: pet, bubbles, panel ---- */
@@ -2723,7 +2725,7 @@ function placeMenu(el,x,y){
 // surface keeps this DOM menu for its session rows, where there is room.
 function showMenu(items,x,y){
   ctx.innerHTML=items.map(it=>it==="sep"?`<div class="sep"></div>`
-    :`<button data-act="${esc(it.act)}"${it.id?` data-sid="${esc(it.id)}"`:""}>${esc(it.label)}${it.key?`<span class="k">${esc(it.key)}</span>`:""}</button>`).join("");
+    :`<button class="${it.danger?"danger":""}" data-act="${esc(it.act)}"${it.id?` data-sid="${esc(it.id)}"`:""}>${esc(it.label)}${it.key?`<span class="k">${esc(it.key)}</span>`:""}</button>`).join("");
   ctx.classList.add("on");
   placeMenu(ctx,x,y);
 }
@@ -2749,6 +2751,22 @@ ctx.addEventListener("click",async e=>{
   if(act==="s-unhide"){ const s=state.sessions.find(x=>x.id===sid);
     try{ await post("/api/session/hide",{sessionId:sid,hidden:false});
       if(s){ s.petHidden=false; render(); } }catch(err){ alert(String(err)); }
+    return; }
+  if(act==="s-delete"){ const s=state.sessions.find(x=>x.id===sid); if(!s) return;
+    const title=s.title||"(untitled)";
+    if(!confirm(`Delete "${title}" in OpenCode?\nThis removes the conversation and cannot be undone.`)) return;
+    try{
+      await post("/api/session/close",{server:s.server,sessionId:s.id});
+      state.sessions=state.sessions.filter(x=>x.id!==s.id);
+      if(selected===s.id){
+        const next=state.sessions.find(x=>!x.petHidden);
+        selected=next?next.id:null;
+        draft=null;
+        msgSession=""; msgKey=""; msgSeq++;
+        if(msgTimer) clearTimeout(msgTimer);
+      }
+      render();
+    }catch(err){ alert(String(err)); }
     return; }
   if(act==="new"){ startDraft(); }
   if(act==="sessions"){ setExpanded(true); showView("chat"); }
@@ -2776,6 +2794,8 @@ document.addEventListener("contextmenu",e=>{
     ...(s.petHidden
       ? [{label:"Show in pet",act:"s-unhide",id:s.id}]
       : [{label:"Hide from pet",act:"s-hide",id:s.id}]),
+    "sep",
+    {label:"Delete session…",act:"s-delete",id:s.id,danger:true},
   ], e.clientX, e.clientY);
 });
 document.addEventListener("mousedown",e=>{ if(!e.target.closest("#ctx")&&!e.target.closest("#pet")) hideCtx(); });

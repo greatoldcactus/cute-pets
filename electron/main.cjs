@@ -377,6 +377,22 @@ function bubbleMenu(info = {}) {
   items.push(
     { type: "separator" },
     { label: "Hide from pet", click: () => brainPost("/api/session/hide", { sessionId: info.sessionId, hidden: true }) },
+    {
+      label: "Delete session…",
+      click: async () => {
+        const { response } = await dialog.showMessageBox(bubbleWin || petWin, {
+          type: "warning",
+          buttons: ["Cancel", "Delete"],
+          defaultId: 0,
+          cancelId: 0,
+          message: "Delete this session in OpenCode?",
+          detail: "The conversation and its history are removed permanently. This cannot be undone.",
+        });
+        if (response === 1) {
+          await brainPost("/api/session/close", { server: info.server, sessionId: info.sessionId });
+        }
+      },
+    },
   );
   Menu.buildFromTemplate(items).popup({ window: bubbleWin || petWin });
 }
