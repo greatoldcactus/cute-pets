@@ -1701,7 +1701,9 @@ function render(){
     const c=state.pet?.counts||{};
     const hiddenCount=state.sessions.filter(s=>s.petHidden).length;
     const allHidden=state.sessions.length&&hiddenCount===state.sessions.length;
-    const total=Number(state.stats?.sessions)||0;
+    // The stats endpoint reports the largest single server, so two independent
+    // servers under-count: never claim fewer sessions than the list holds.
+    const total=Math.max(Number(state.stats?.sessions)||0,state.sessions.length);
     const parts=[plan?"planning":"",c.waiting?`${c.waiting} needs you`:"",c.running?`${c.running} working`:"",
       c.error?`${c.error} error`:"",c.idle?`${c.idle} idle`:"",allHidden?"all hidden":"",total?`${total} total`:""]
       .filter(Boolean);
