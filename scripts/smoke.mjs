@@ -390,6 +390,113 @@ try {
   );
   console.log("form cancel:", formId);
 
+  // --- queued inbox: edit and send now -----------------------------------
+  const inboxStart = await post(brainUrl, "/api/prompt", {
+    server: fakeUrl,
+    newSession: true,
+    title: "cute-pets smoke inbox",
+    text: "Start a turn with a queued follow-up",
+  });
+  const inboxSession = inboxStart.sessionId;
+  await waitForState(
+    brainUrl,
+    (s) => s.sessions.find((x) => x.id === inboxSession)?.state === "running",
+    "inbox session did not start running",
+  );
+  await post(brainUrl, "/api/prompt", {
+    server: fakeUrl,
+    sessionId: inboxSession,
+    text: "edit me",
+    delivery: "queue",
+  });
+  const queued = await waitForState(
+    brainUrl,
+    (s) => (s.sessions.find((x) => x.id === inboxSession)?.queued ?? []).some((q) => q.text === "edit me"),
+    "queued message did not reach /api/state",
+  );
+  const editItem = queued.sessions
+    .find((x) => x.id === inboxSession)
+    .queued.find((q) => q.text === "edit me");
+  const edited = await post(brainUrl, "/api/inbox/edit", {
+    server: fakeUrl,
+    sessionId: inboxSession,
+    inboxId: editItem.id,
+  });
+  check(edited.taken === true, "inbox edit did not take the message");
+  check(edited.text === "edit me", `inbox edit text: ${JSON.stringify(edited.text)}`);
+  await waitForState(
+    brainUrl,
+    (s) => !(s.sessions.find((x) => x.id === inboxSession)?.queued ?? []).some((q) => q.id === editItem.id),
+    "the edited message stayed queued",
+  );
+  console.log("inbox edit:", editItem.id.slice(0, 12), "->", JSON.stringify(edited.text));
+
+  // A fresh turn makes the next prompt queue again, then send now should stop
+  // that turn and deliver the message immediately.
+  await waitForState(
+    brainUrl,
+    (s) => s.sessions.find((x) => x.id === inboxSession)?.state === "idle",
+    "the first inbox turn never finished",
+  );
+  await post(brainUrl, "/api/prompt", {
+    server: fakeUrl,
+    sessionId: inboxSession,
+    text: "Another long turn",
+  });
+  await waitForState(
+    brainUrl,
+    (s) => s.sessions.find((x) => x.id === inboxSession)?.state === "running",
+    "inbox session did not restart",
+  );
+  await post(brainUrl, "/api/prompt", {
+    server: fakeUrl,
+    sessionId: inboxSession,
+    text: "send me now",
+    delivery: "queue",
+  });
+  const queuedNow = await waitForState(
+    brainUrl,
+    (s) => (s.sessions.find((x) => x.id === inboxSession)?.queued ?? []).some((q) => q.text === "send me now"),
+    "the second queued message did not appear",
+  );
+  const sendItem = queuedNow.sessions
+    .find((x) => x.id === inboxSession)
+    .queued.find((q) => q.text === "send me now");
+  await post(brainUrl, "/api/inbox/steer", {
+    server: fakeUrl,
+    sessionId: inboxSession,
+    inboxId: sendItem.id,
+    interrupt: true,
+  });
+  await waitForState(
+    brainUrl,
+    (s) => !(s.sessions.find((x) => x.id === inboxSession)?.queued ?? []).some((q) => q.id === sendItem.id),
+    "send now did not deliver the message",
+  );
+  const fakeStats = await get(fakeUrl, "/api/test/stats");
+  check(
+    fakeStats.data?.interrupts?.some(
+      (x) => x.sessionID === inboxSession && x.resume === true && x.interrupted === true,
+    ),
+    "send now did not interrupt the running turn with resume",
+  );
+  const inboxMsgs = await get(
+    brainUrl,
+    `/api/messages?server=${encodeURIComponent(fakeUrl)}&sessionId=${encodeURIComponent(inboxSession)}&limit=20`,
+  );
+  const delivered = inboxMsgs
+    .filter((m) => m.role === "user")
+    .map((m) => m.parts.filter((p) => p.type === "text").map((p) => p.text).join(""))
+    .join("\n");
+  check(delivered.includes("send me now"), `send now lost the message: ${JSON.stringify(delivered)}`);
+  const lateEdit = await post(brainUrl, "/api/inbox/edit", {
+    server: fakeUrl,
+    sessionId: inboxSession,
+    inboxId: sendItem.id,
+  });
+  check(lateEdit.taken === false, "editing a delivered message was not reported as taken");
+  console.log("inbox send now:", sendItem.id.slice(0, 12));
+
   // --- quota failure ------------------------------------------------------
   const failPort = await freePort();
   const failUrl = `http://127.0.0.1:${failPort}`;

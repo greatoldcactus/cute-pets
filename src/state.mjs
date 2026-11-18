@@ -24,7 +24,7 @@ const sameModelRef = (a, b) =>
 
 // Normalize a v2 inbox item whether it came from GET /inbox, the prompt
 // response or an enqueued event (where the id/timestamp live beside the item).
-function inboxRecord(item, createdAt = null) {
+export function inboxRecord(item, createdAt = null) {
   const id = item?.id ?? item?.inboxID;
   if (!id) return null;
   return {

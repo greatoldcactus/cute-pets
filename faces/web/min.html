@@ -303,7 +303,12 @@ border-radius:9px;padding:9px;font-size:11.5px;white-space:normal;overflow-wrap:
 .btw .btwfoot .sp{flex:1}
 .qrow{display:flex;gap:6px;align-items:center;background:#171d2a;border:1px solid var(--line);border-radius:8px;padding:4px 7px;font-size:11px}
 .qrow .qmode{flex:none;font-size:9.5px;color:#9fd2ff;text-transform:uppercase;letter-spacing:.4px}
-.qrow .qtext{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.qrow .qtext{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim);
+ background:none;border:0;padding:0;font:inherit;text-align:left;cursor:pointer}
+.qrow .qtext:hover{color:#cfe0ff;text-decoration:underline;text-underline-offset:2px}
+.qrow .qtext:disabled{cursor:default;color:var(--dim);text-decoration:none}
+.qrow.qhint .qtext{cursor:default;color:#9fd2ff}
+.qrow.qhint .qtext:hover{text-decoration:none}
 .qrow .pbtn{padding:2px 6px;font-size:10px;flex:none}
 .pitem{display:flex;gap:8px;padding:6px 10px;cursor:pointer;align-items:baseline}
 .pitem:hover,.pitem.sel{background:#222736}
@@ -530,7 +535,7 @@ try{ const v=Number(localStorage.getItem("cp.uiScale")); if(UI_SCALES.includes(v
 let activitySig="", activityOpen=false, activityPinned=false, activityHoverTimer=0;
 let draft=null, defaults=null; // a new chat before its first message
 let composerDrafts=new Map(), composerKey=""; // unsent text per chat/draft
-let submitDelivery=null, queuedKey="", planReadySig=""; // one-shot /queue from the keyboard · queue/plan strips cache
+let submitDelivery=null, resend=null, queuedKey="", planReadySig=""; // one-shot /queue · edited queue item's delivery · queue/plan strips cache
 let revertSig="", revertPrefill={key:"",text:""}; // staged-revert strip + composer prefill
 let forkState={session:null,items:[],shown:[],sel:0}; // /fork picker
 let btwResults=new Map(); // session key -> {session,question,answer,error,busy,seq,unseen}
@@ -769,6 +774,7 @@ function syncComposer(){
 function clearComposer(){
   const key=currentComposerKey();
   composerDrafts.delete(key);
+  resend=null;
   if(composerKey===key){ const el=$("#prompt"); if(el) el.value=""; }
   revertPrefill={key:"",text:""};
 }
@@ -983,19 +989,29 @@ function renderPerms(){
 }
 // Undelivered messages live in OpenCode's durable inbox, not in the message
 // history. Show them above the composer so /queue does not look like a no-op.
+// The inbox cannot be edited in place, so clicking a message pulls it back into
+// the composer; send now either promotes it or stops the running step first.
 function renderQueued(){
   const el=$("#queued"); if(!el) return;
   const s=currentSession();
   const rows=view==="chat"&&s&&Array.isArray(s.queued)?s.queued:[];
-  const key=JSON.stringify(rows.map(x=>[x.id,x.delivery,x.text]));
+  const running=Boolean(view==="chat"&&s&&s.state==="running");
+  const hint=view==="chat"&&s&&resend&&resend.key===currentComposerKey()?resend.delivery:null;
+  const key=JSON.stringify([s?.id??"",s?.state??"",hint,rows.map(x=>[x.id,x.delivery,x.text])]);
   if(key===queuedKey) return;
   queuedKey=key;
-  el.innerHTML=rows.map(x=>`<div class="qrow" title="${esc(x.text)}">
+  const list=rows.map(x=>`<div class="qrow" title="${esc(x.text)}">
       <span class="qmode">${x.delivery==="steer"?"steering":"queued"}</span>
-      <span class="qtext">${esc(x.text)||"(empty)"}</span>
-      ${x.delivery==="queue"?`<button class="pbtn" type="button" data-queue-steer="${esc(x.id)}" title="Steer into the running turn">send now</button>`:""}
+      <button class="qtext" type="button" data-queue-edit="${esc(x.id)}" title="Edit this message in the composer">${esc(x.text)||"(empty)"}</button>
+      ${x.delivery==="queue"||running?`<button class="pbtn" type="button" data-queue-steer="${esc(x.id)}" title="${running?"Stops the running step and sends this message now":"Sends this message now"}">send now</button>`:""}
       <button class="pbtn" type="button" data-queue-cancel="${esc(x.id)}" title="Cancel queued message">&times;</button>
     </div>`).join("");
+  const note=hint?`<div class="qrow qhint">
+      <span class="qmode">edited</span>
+      <span class="qtext">will resend as ${hint==="queue"?"queued":"steering"}</span>
+      <button class="pbtn" type="button" data-resend-clear title="Use the normal delivery for the next send">&times;</button>
+    </div>`:"";
+  el.innerHTML=list+note;
 }
 // A finished plan keeps the read-only plan agent and is marked planReady by the
 // brain when a plan turn reaches idle. Offer the hand-off in the chat, where the
@@ -1738,6 +1754,39 @@ document.addEventListener("click",async e=>{
   if(send){ await sendForm(send.dataset.formSend); return; }
   const fskip=e.target.closest("[data-form-cancel]");
   if(fskip){ await cancelForm(fskip.dataset.formCancel); return; }
+  const qedit=e.target.closest("[data-queue-edit]");
+  if(qedit){
+    const s=currentSession(); if(!s) return;
+    const id=qedit.dataset.queueEdit;
+    const item=(s.queued||[]).find(x=>x.id===id);
+    if(!item) return;
+    const el=$("#prompt");
+    if(el && el.value.trim() && !confirm("Replace the draft in the composer with this queued message?")) return;
+    const key=currentComposerKey();
+    qedit.disabled=true;
+    try{
+      const r=await post("/api/inbox/edit",{server:s.server,sessionId:s.id,inboxId:id});
+      s.queued=(s.queued||[]).filter(x=>x.id!==id);
+      queuedKey="";
+      if(!r.taken){
+        await refreshState();
+        render();
+        alert("That message was already sent.");
+        return;
+      }
+      const text=typeof r.text==="string"?r.text:item.text||"";
+      composerDrafts.set(key,text);
+      if(currentComposerKey()===key && el){
+        el.value=text; el.focus(); el.setSelectionRange(text.length,text.length);
+      }
+      // A message queued on purpose should go back to waiting for the turn to
+      // finish. Steering is already the normal delivery, so only queue needs
+      // the one-shot reminder in the strip.
+      if(r.delivery==="queue" && currentComposerKey()===key) resend={key,delivery:"queue"};
+      render();
+    }catch(err){ queuedKey=""; await refreshState().catch(()=>{}); alert(String(err)); }
+    return;
+  }
   const qcancel=e.target.closest("[data-queue-cancel]");
   if(qcancel){
     const s=currentSession(); if(!s) return;
@@ -1746,23 +1795,31 @@ document.addEventListener("click",async e=>{
     try{
       await post("/api/inbox/cancel",{server:s.server,sessionId:s.id,inboxId:id});
       s.queued=(s.queued||[]).filter(x=>x.id!==id);
+      queuedKey="";
       render();
-    }catch{ await refreshState(); }
+    }catch{ queuedKey=""; await refreshState(); }
     return;
   }
   const qsteer=e.target.closest("[data-queue-steer]");
   if(qsteer){
     const s=currentSession(); if(!s) return;
     const id=qsteer.dataset.queueSteer;
+    // A running turn only checks steering at its next step boundary. Sending
+    // now means stopping the active step first; waiting on an approval or an
+    // idle session just needs the promotion.
+    const interrupt=s.state==="running";
     qsteer.disabled=true;
     try{
-      await post("/api/inbox/steer",{server:s.server,sessionId:s.id,inboxId:id});
+      await post("/api/inbox/steer",{server:s.server,sessionId:s.id,inboxId:id,interrupt});
       const item=(s.queued||[]).find(x=>x.id===id);
       if(item) item.delivery="steer";
+      queuedKey="";
       render();
-    }catch{ await refreshState(); }
+    }catch{ queuedKey=""; await refreshState(); }
     return;
   }
+  const resendClear=e.target.closest("[data-resend-clear]");
+  if(resendClear){ resend=null; queuedKey=""; render(); return; }
   const row=e.target.closest("[data-session]");
   if(row){
     closeActivity(true);
@@ -2453,6 +2510,8 @@ async function changeDir(p){
 
 $("#prompt").addEventListener("input",e=>{
   composerDrafts.set(currentComposerKey(),e.target.value);
+  // Deleting the edited text also drops its "resend as queued" reminder.
+  if(resend && !e.target.value.trim()){ resend=null; queuedKey=""; renderQueued(); }
   const v=e.target.value;
   if(palMode==="dirs"){
     if(!/^\/cd\s+/.test(v)){ closePalette(); return; }
@@ -2581,7 +2640,11 @@ async function sendMessage(text, delivery=null){
 $("#composer").addEventListener("submit",async e=>{
   e.preventDefault();
   let raw=$("#prompt").value.trim();
-  let delivery=submitDelivery; submitDelivery=null;
+  let delivery=submitDelivery;
+  // An edited queued message resends the way it was queued unless the keyboard
+  // chose a delivery explicitly.
+  if(delivery==null && resend && resend.key===currentComposerKey()) delivery=resend.delivery;
+  submitDelivery=null;
   if(!raw) return;
   // `/queue <text>` waits for the running turn; `/steer <text>` forces a steer.
   // The rest is literal text, so `/queue /model` is a message, not a command.

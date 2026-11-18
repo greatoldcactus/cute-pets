@@ -298,7 +298,12 @@ export class OpenCodeV2Client {
     });
   }
 
-  abort(id) { return this.#req(`/api/session/${enc(id)}/interrupt`, { method: "POST", body: "{}" }); }
+  // resume=true hands pending steering input its own turn, so a stop plus a
+  // "send now" message does not leave the message parked until the next prompt.
+  abort(id, { resume = false } = {}) {
+    const q = resume ? "?resume=true" : "";
+    return this.#req(`/api/session/${enc(id)}/interrupt${q}`, { method: "POST", body: "{}" });
+  }
   deleteSession(id) { return this.#req(`/api/session/${enc(id)}`, { method: "DELETE" }); }
 
   replyPermission(permission, reply) {

@@ -229,12 +229,23 @@ export function startServer({ port, host, store, api }) {
         return json(res, 200, out);
       }
 
+      if (route === "POST /api/inbox/edit") {
+        const body = await readBody(req);
+        const out = await api.editInbox({
+          server: body.server ?? null,
+          sessionId: body.sessionId ?? null,
+          inboxId: body.inboxId ?? null,
+        });
+        return json(res, 200, out);
+      }
+
       if (route === "POST /api/inbox/steer") {
         const body = await readBody(req);
         const out = await api.steerInbox({
           server: body.server ?? null,
           sessionId: body.sessionId ?? null,
           inboxId: body.inboxId ?? null,
+          interrupt: body.interrupt === true,
         });
         return json(res, 200, out);
       }

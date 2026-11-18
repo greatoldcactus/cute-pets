@@ -168,8 +168,10 @@ Shift+Enter adds a newline**. While a turn is running, a normal send **steers** 
 that turn (OpenCode's default); `/queue <message>` waits for the current turn to finish,
 and **Ctrl/Cmd+Shift+Enter** does the same for the composer text. `/steer <message>`
 forces the opposite. Queued messages appear in a strip above the composer, where they can
-be cancelled or promoted with **send now**; the queue is OpenCode's own durable inbox, so
-it survives restarts and stays in sync with the TUI. Typed-but-unsent text is kept per
+be cancelled, clicked to pull the text back into the composer, or promoted with
+**send now**; while a turn is running, **send now** stops the active step first so the
+message is delivered immediately. The queue is OpenCode's own durable inbox, so it
+survives restarts and stays in sync with the TUI. Typed-but-unsent text is kept per
 session and restored when you switch back. The **☰** button in the panel header
 (**Ctrl/Cmd+B**) hides the sessions column so the chat fills the whole panel. While it is
 hidden, a round activity badge shows how many sessions are running, waiting, errored or
@@ -413,7 +415,10 @@ POST /api/prompt           {text, sessionId?|newSession, directory?, server?, mo
 GET  /api/messages         ?server=&sessionId=&limit=
 GET  /api/message-page     ?server=&sessionId=&limit=&order=&type=&cursor=&compact=1
 POST /api/inbox/cancel     {server, sessionId, inboxId}   cancel an undelivered message
-POST /api/inbox/steer      {server, sessionId, inboxId}   promote queue → steer
+POST /api/inbox/edit       {server, sessionId, inboxId}   take it back out for the composer
+                             returns {taken, text, delivery}; taken:false = already sent
+POST /api/inbox/steer      {server, sessionId, inboxId, interrupt?}
+                             promote queue → steer; interrupt stops the running step
 POST /api/permission       {id, reply: once|always|reject}
 POST /api/form             {server, sessionId, formId, answer}   answer a v2 agent question
 POST /api/form/cancel      {server, sessionId, formId, message?} decline it without answering

@@ -274,7 +274,10 @@ Wayland may still refuse programmatic positioning; the shell's XWayland mode is 
   `session.reasoning.*` and `session.tool.*` for the live activity preview). The durable
   inbox (`GET /api/session/{id}/inbox`, `PATCH`/`DELETE .../{inboxID}`) backs the queue
   strip; the brain tracks inbox items from `session.inbox.*` events and hydrates active
-  sessions on attach. Fork is implemented with an optional message boundary
+  sessions on attach. `PATCH` can only change delivery, so editing is cancel plus a
+  composer prefill (`POST /api/inbox/edit`), and **send now** uses
+  `interrupt?resume=true` to stop the active step and deliver pending steering input.
+  Fork is implemented with an optional message boundary
   (`POST /api/session/{id}/fork {before}`; `session.forked` carries no info, so the
   client fetches the new session to pick up its `(fork #N)` title). Model/agent switch
   (`/api/session/{id}/model`, `/agent`), session move (`/api/session/{id}/move`) and

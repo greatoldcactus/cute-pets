@@ -16,6 +16,9 @@ const directory = path.resolve(args.directory ?? process.cwd());
 const sessions = new Map(); // id -> session
 const messages = new Map(); // id -> message[]
 const forms = new Map(); // id -> pending question
+const inboxes = new Map(); // session id -> Map(inbox id -> pending input)
+const timers = new Map(); // session id -> Set(timeout) for the running turn
+const interrupts = []; // test-only log of interrupt requests
 const clients = new Set(); // open SSE responses
 
 const now = () => Date.now();
@@ -73,6 +76,7 @@ function createSession(body = {}) {
     model: body.model ?? { id: "fake-1", providerID: "fake" },
     tokens: { input: 0, output: 0 },
     cost: 0,
+    running: false,
     time: { created: now(), updated: now(), busy: null, idle: null },
   };
   sessions.set(id, session);
@@ -80,16 +84,91 @@ function createSession(body = {}) {
   return session;
 }
 
-function prompt(session, body) {
-  const id = session.id;
-  const text = String(body.text ?? "");
-  const list = messages.get(id) ?? [];
+function appendUser(session, text) {
+  const list = messages.get(session.id) ?? [];
   list.push({ id: newID("msg"), type: "user", text, time: { created: now() } });
-  messages.set(id, list);
+  messages.set(session.id, list);
+}
 
+function inboxFor(session, create = true) {
+  let map = inboxes.get(session.id);
+  if (!map && create) {
+    map = new Map();
+    inboxes.set(session.id, map);
+  }
+  return map;
+}
+
+// Pending inputs. A queue item waits for the turn to finish; a steer item is
+// consumed at the next step boundary, or by interrupt(resume=true).
+function enqueue(session, text, delivery) {
+  const item = {
+    id: newID("inbox"),
+    type: "user",
+    delivery,
+    payload: { text },
+    time: { created: now() },
+  };
+  inboxFor(session).set(item.id, item);
+  broadcast("session.inbox.enqueued", {
+    sessionID: session.id,
+    inboxID: item.id,
+    item,
+    created: item.time.created,
+  });
+  return item;
+}
+
+function dropInbox(session, inboxID) {
+  const map = inboxFor(session, false);
+  if (!map?.delete(inboxID)) return false;
+  if (!map.size) inboxes.delete(session.id);
+  return true;
+}
+
+function deliverSteers(session) {
+  const map = inboxFor(session, false);
+  if (!map?.size) return false;
+  let delivered = false;
+  for (const item of [...map.values()]) {
+    if (item.delivery !== "steer") continue;
+    dropInbox(session, item.id);
+    appendUser(session, item.payload?.text ?? "");
+    broadcast("session.inbox.delivered", { sessionID: session.id, inboxID: item.id });
+    delivered = true;
+  }
+  return delivered;
+}
+
+function isBusy(session) {
+  return Boolean(session.running);
+}
+
+function clearTimers(id) {
+  for (const t of timers.get(id) ?? []) clearTimeout(t);
+  timers.delete(id);
+}
+
+function later(id, fn, ms) {
+  let set = timers.get(id);
+  if (!set) {
+    set = new Set();
+    timers.set(id, set);
+  }
+  const t = setTimeout(() => {
+    set.delete(t);
+    fn();
+  }, ms);
+  set.add(t);
+}
+
+function startTurn(session) {
+  const list = messages.get(session.id) ?? [];
+  messages.set(session.id, list);
+  session.running = true;
   session.time.busy = now();
   session.time.updated = now();
-  broadcast("session.execution.started", { sessionID: id });
+  broadcast("session.execution.started", { sessionID: session.id });
 
   if (failMode === "quota") {
     const error = {
@@ -107,10 +186,11 @@ function prompt(session, body) {
       error,
       time: { created: now(), completed: now() },
     });
-    setTimeout(() => {
+    later(session.id, () => {
+      session.running = false;
       session.time.idle = now();
       session.time.updated = now();
-      broadcast("session.execution.failed", { sessionID: id, error });
+      broadcast("session.execution.failed", { sessionID: session.id, error });
     }, 300);
     return;
   }
@@ -128,16 +208,30 @@ function prompt(session, body) {
 
   // Keep the turn visibly running long enough for a 1s poller to observe it,
   // then finish with the deterministic reply the smoke test expects.
-  setTimeout(() => broadcast("session.text.delta", { sessionID: id, delta: "alive" }), 150);
-  setTimeout(() => broadcast("session.text.ended", { sessionID: id, text: "alive" }), 300);
-  setTimeout(() => {
+  later(session.id, () => broadcast("session.text.delta", { sessionID: session.id, delta: "alive" }), 150);
+  later(session.id, () => broadcast("session.text.ended", { sessionID: session.id, text: "alive" }), 300);
+  later(session.id, () => {
     assistant.time.completed = now();
+    session.running = false;
     session.time.idle = now();
     session.time.updated = now();
     session.tokens = { input: 12, output: 1 };
-    broadcast("session.usage.updated", { sessionID: id, cost: 0, tokens: session.tokens });
-    broadcast("session.execution.succeeded", { sessionID: id });
+    broadcast("session.usage.updated", { sessionID: session.id, cost: 0, tokens: session.tokens });
+    broadcast("session.execution.succeeded", { sessionID: session.id });
+    // Steering is consumed by the end of a turn; queued prompts stay parked.
+    if (deliverSteers(session)) startTurn(session);
   }, 1500);
+}
+
+function prompt(session, body) {
+  const text = String(body.text ?? "");
+  const delivery = body.delivery === "queue" ? "queue" : "steer";
+  // A prompt sent while the session is busy is admitted to the inbox instead of
+  // touching the history, exactly like OpenCode's durable queue.
+  if (isBusy(session)) return { item: enqueue(session, text, delivery) };
+  appendUser(session, text);
+  startTurn(session);
+  return null;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -194,6 +288,8 @@ const server = http.createServer(async (req, res) => {
       const session = sessionByID(delSession[1]);
       if (!session) return json(res, 404, { error: "session not found" });
       sessions.delete(session.id);
+      clearTimers(session.id);
+      inboxes.delete(session.id);
       broadcast("session.deleted", { sessionID: session.id });
       res.writeHead(204);
       return res.end();
@@ -201,6 +297,7 @@ const server = http.createServer(async (req, res) => {
 
     if (route === "GET /api/permission/request") return json(res, 200, { data: [] });
     if (route === "GET /api/form") return json(res, 200, { data: [...forms.values()] });
+    if (route === "GET /api/test/stats") return json(res, 200, { data: { interrupts } });
     if (route === "POST /api/test/form") {
       const body = await readBody(req);
       const form = {
@@ -286,6 +383,43 @@ const server = http.createServer(async (req, res) => {
       return json(res, 404, { error: "not found", route });
     }
 
+    const inboxItem = url.pathname.match(/^\/api\/session\/([^/]+)\/inbox\/([^/]+)$/);
+    if (inboxItem) {
+      const session = sessionByID(inboxItem[1]);
+      if (!session) return json(res, 404, { error: "session not found" });
+      const inboxID = decodeURIComponent(inboxItem[2]);
+      const item = inboxFor(session, false)?.get(inboxID);
+      if (!item) {
+        // Cancelling an item that already left the inbox is a no-op upstream;
+        // changing its delivery is a conflict.
+        if (req.method === "DELETE") {
+          res.writeHead(204);
+          return res.end();
+        }
+        return json(res, 409, { error: "inbox item not pending" });
+      }
+      if (req.method === "DELETE") {
+        dropInbox(session, inboxID);
+        broadcast("session.inbox.cancelled", { sessionID: session.id, inboxID });
+        res.writeHead(204);
+        return res.end();
+      }
+      if (req.method === "PUT" || req.method === "PATCH") {
+        const body = await readBody(req);
+        if (body.delivery === "queue" || body.delivery === "steer") item.delivery = body.delivery;
+        broadcast("session.inbox.delivery.changed", {
+          sessionID: session.id,
+          inboxID,
+          delivery: item.delivery,
+        });
+        // Steering wakes an idle session; a queued prompt keeps waiting.
+        if (item.delivery === "steer" && !isBusy(session) && deliverSteers(session)) startTurn(session);
+        res.writeHead(204);
+        return res.end();
+      }
+      return json(res, 404, { error: "not found", route });
+    }
+
     const match = url.pathname.match(/^\/api\/session\/([^/]+)(?:\/([^/]+))?$/);
     if (match) {
       const session = sessionByID(match[1]);
@@ -305,7 +439,25 @@ const server = http.createServer(async (req, res) => {
           .sort((a, b) => (a.time?.created ?? 0) - (b.time?.created ?? 0));
         return json(res, 200, { data: rows, cursor: null });
       }
-      if (action === "inbox" && req.method === "GET") return json(res, 200, { data: [] });
+      if (action === "inbox" && req.method === "GET") {
+        return json(res, 200, { data: [...(inboxFor(session, false)?.values() ?? [])] });
+      }
+      if (action === "interrupt" && req.method === "POST") {
+        const resume = url.searchParams.get("resume") === "true";
+        const interrupted = isBusy(session);
+        interrupts.push({ sessionID: session.id, resume, interrupted });
+        if (interrupted) {
+          clearTimers(session.id);
+          session.running = false;
+          session.time.idle = now();
+          session.time.updated = now();
+          broadcast("session.execution.interrupted", { sessionID: session.id });
+        }
+        // resume hands pending steering input its own turn, while queued
+        // prompts stay parked until they are promoted or the turn ends.
+        if (resume && deliverSteers(session)) startTurn(session);
+        return json(res, 200, { data: { interrupted } });
+      }
       if (action === "agent" && req.method === "POST") {
         // Lets the plan-ready hand-off work against the stub: the brain refreshes
         // the session from this response after switching the agent.
@@ -344,8 +496,8 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { data: { text: "A concise side answer." } });
       }
       if (action === "prompt" && req.method === "POST") {
-        prompt(session, await readBody(req));
-        return json(res, 200, { data: {} });
+        const admitted = prompt(session, await readBody(req));
+        return json(res, 200, { data: admitted?.item ?? {} });
       }
     }
 

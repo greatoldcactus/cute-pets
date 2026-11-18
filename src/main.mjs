@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { readConfig, writeConfig, stateDir } from "./config.mjs";
-import { PetState, STATE } from "./state.mjs";
+import { PetState, STATE, inboxRecord } from "./state.mjs";
 import { OpenCodeClient } from "./opencode.mjs";
 import { OpenCodeV2Client } from "./opencode-v2.mjs";
 import { findOpencodePorts } from "./discover.mjs";
@@ -1042,12 +1042,55 @@ class Hub {
     return { ok: true };
   }
 
-  async steerInbox({ server, sessionId, inboxId }) {
+  // The inbox has no in-place edit: the API can only change delivery. Take the
+  // item out of the queue and hand its text back so the face can reopen it in
+  // the composer, the same flow as the TUI's "undo" action. Re-reading the
+  // inbox first keeps a message that was delivered in the meantime from being
+  // offered as editable and then sent twice.
+  async editInbox({ server, sessionId, inboxId }) {
+    const url = this.pickServer(server);
+    const entry = url && this.clients.get(url);
+    if (!entry || !sessionId || !inboxId) throw new Error("server, sessionId and inboxId required");
+    if (typeof entry.client.inbox !== "function" || typeof entry.client.cancelInbox !== "function") {
+      throw new Error("queued messages need OpenCode 2");
+    }
+    const list = await entry.client.inbox(sessionId);
+    const item = (list ?? []).find((x) => (x.id ?? x.inboxID) === inboxId);
+    if (!item) {
+      this.store.removeInbox(url, sessionId, inboxId);
+      return { taken: false };
+    }
+    const rec = inboxRecord(item);
+    await entry.client.cancelInbox(sessionId, inboxId);
+    this.store.removeInbox(url, sessionId, inboxId);
+    return { taken: true, text: rec?.text ?? "", delivery: rec?.delivery ?? "queue" };
+  }
+
+  async steerInbox({ server, sessionId, inboxId, interrupt = false }) {
     const url = this.pickServer(server);
     const entry = url && this.clients.get(url);
     if (!entry || !sessionId || !inboxId) throw new Error("server, sessionId and inboxId required");
     if (typeof entry.client.setInboxDelivery !== "function") throw new Error("queued messages need OpenCode 2");
-    await entry.client.setInboxDelivery(sessionId, inboxId, "steer");
+    const key = `${url}::${sessionId}`;
+    const rec = this.store.sessions.get(key);
+    const item = this.store.inbox.get(key)?.get(inboxId);
+    // "Send now" during a running turn means stop the current step: steering
+    // otherwise waits for the running tool to finish. Interrupt first, because
+    // promoting first can abort the turn the promoted message just started if
+    // the old turn ends in between. resume hands pending steering input its own
+    // turn; a queued item is then woken by the delivery change below.
+    if (interrupt && rec?.state === STATE.RUNNING) {
+      await entry.client.abort(sessionId, { resume: true });
+    }
+    if (item?.delivery !== "steer") {
+      try {
+        await entry.client.setInboxDelivery(sessionId, inboxId, "steer");
+      } catch (err) {
+        // The interrupt may already have delivered an item that was steering;
+        // upstream reports that as a conflict, not a missing item.
+        if (err.status !== 404 && err.status !== 409) throw err;
+      }
+    }
     this.store.setInboxDelivery(url, sessionId, inboxId, "steer");
     return { ok: true };
   }
