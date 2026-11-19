@@ -1189,7 +1189,8 @@ function renderMessage(m){
     : "";
   const copy=text?`<button class="msgcopy" type="button" data-copy="${esc(mid)}" title="Copy message" aria-label="Copy message">copy</button>`:"";
   const bar=(actions||copy)?`<div class="msgbar">${actions}${copy}</div>`:"";
-  return `<div class="msg ${role}">${bar}${above?trace:""}${text?CPMarkdown.toHtml(text):""}${messageError(m.error,Boolean(m.errorRecovered),Boolean(m.errorRetrying))}${above?"":trace}</div>`;
+  const errLine=hiddenRecoveredError(m.error,m.errorRecovered)?"":messageError(m.error,Boolean(m.errorRecovered),Boolean(m.errorRetrying));
+  return `<div class="msg ${role}">${bar}${above?trace:""}${text?CPMarkdown.toHtml(text):""}${errLine}${above?"":trace}</div>`;
 }
 // An error is recovered when a later assistant message without an error exists.
 // A retryable provider error is also muted while the session is still running,
@@ -1213,6 +1214,13 @@ function isRetryableError(err){
   const status=Number(err?.status||0);
   if(status===408||status===425||status===429||status>=500) return true;
   return /rate.?limit|retry|overload|unavailable|timeout|transport|econnreset|econnrefused|network|temporar/i.test(type+" "+msg);
+}
+// A transport/rate-limit error that the turn already recovered from is noise:
+// OpenCode retried and kept going. Hide the line instead of leaving a muted
+// "retried" remnant above the answer. Non-retryable errors keep their line even
+// when later output exists, so an auth/quota failure is still visible.
+function hiddenRecoveredError(err, recovered){
+  return Boolean(err&&recovered&&isRetryableError(err));
 }
 function compactPreview(text, n = 120){
   const one=String(text??"").replace(/\s+/g," ").trim();
@@ -1293,6 +1301,7 @@ function renderProcess(msgs, { live = false, activity = null } = {}){
   const errs=[], seen=new Map();
   for(const m of msgs){
     const e=m.error; if(!e) continue;
+    if(hiddenRecoveredError(e,m.errorRecovered)) continue;
     const k=`${e.type}|${e.message}`;
     const prev=seen.get(k);
     if(prev){
@@ -1316,6 +1325,9 @@ function renderProcess(msgs, { live = false, activity = null } = {}){
     ? `<details class="trace" data-k="${esc(key)}:trace">${summary}<div class="tracebody">`+
       `${parts.map((p,i)=>renderPart(p,key,i)).join("")}</div></details>`
     : "";
+  // A retry-only step can lose both its error and its parts. Do not leave an
+  // empty process shell behind; if it is the live step, keep its activity.
+  if(!trace&&!errs.length) return live?renderLiveActivity(activity):"";
   return `<div class="msg assistant process">${errs.map(e=>messageError(e.err,e.recovered,e.retrying)).join("")}${trace}</div>`;
 }
 let msgStore=null, msgLoadingOlder=false;

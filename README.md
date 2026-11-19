@@ -191,8 +191,9 @@ thinking/tool calls are grouped into one collapsed trace
 (`15 steps · 17 tools · 15 thinking`) per turn, expandable to the individual calls with
 their input/output. While a session is running, the last trace shows a live line such as
 `● thinking · …` or `● shell · running · …`. Provider errors stay visible as a compact
-line: muted for aborted steps and for errors that were retried and followed by another
-assistant step, red only when the turn actually failed.
+line while the turn is retrying, and red only when the turn actually failed. A transport
+or rate-limit error that the turn recovered from disappears once later output exists, so
+a successful retry does not leave a muted remnant above the answer.
 
 **New chat** — a blank chat seeded from the session you are viewing: directory, model
 (including its effort variant) and agent. The header shows `provider/model#variant`

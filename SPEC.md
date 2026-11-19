@@ -113,11 +113,11 @@ The v2 session list is OpenCode's newest 50-session page; the brain does not pag
 `stats` supplies the all-time totals for the header, tray and Settings, and the sessions
 column footer labels the loaded page (`newest 50 of N sessions`).
 
-Message errors are rendered as fatal (red) only when the turn did not continue: if any
-later assistant message without an error exists, the earlier error was retried and is
-shown muted as `retried`. A retryable error (429/5xx/network/timeout) is shown as
-`retrying` while the session is still running. The same rule keeps the collapsed process
-trace from turning red for a recovered provider/tool failure.
+Message errors are rendered as fatal (red) only when the turn did not continue. A
+retryable error (429/5xx/network/timeout) is shown as `retrying` while the session is
+still running, and is hidden once a later assistant message shows the turn recovered.
+Recovered non-retryable errors stay muted as `retried`. The same recovery rule keeps the
+collapsed process trace from turning red for a recovered provider failure.
 
 Session records include a live `activity`
 `{kind:"thinking"|"tool", text, tool, detail, status, at}` from v2
