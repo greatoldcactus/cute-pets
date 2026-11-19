@@ -286,7 +286,9 @@ Wayland may still refuse programmatic positioning; the shell's XWayland mode is 
   commits a staged revert before sending the replacement prompt. Aggregate totals come from
   experimental `GET /api/experimental/session/stats?tools=none`. `/btw` uses
   `POST /api/session/{id}/generate {prompt}` and returns transient text from the session
-  context without mutating history. Compact/share are not wired for v2.
+  context without mutating history. Compaction uses `POST /api/session/{id}/compact`
+  (admitted asynchronously; `session.compaction.*` drives progress) instead of the v1
+  summarize route. Share is not wired for v2.
 - **v2 forms** are agent questions that block a session: `GET /api/form?location[directory]=…`
   lists pending forms for a location, `POST /api/session/{id}/form/{formID}/reply`
   `{answer}` answers one, and `DELETE …/form/{formID}?message=…` cancels. Events are

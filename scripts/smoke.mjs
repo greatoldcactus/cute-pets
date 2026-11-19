@@ -226,6 +226,34 @@ try {
   check(afterBtw.length === beforeBtw.length, "/btw appended to the session history");
   console.log("btw:", btw.text);
 
+  // --- /compact -----------------------------------------------------------
+  // v2 admits compaction through POST /api/session/{id}/compact; v1's
+  // summarize route does not exist there. The stub records the request so the
+  // test can prove the brain reached the v2 route, not the v1 one.
+  const compact = await post(brainUrl, "/api/session/action", {
+    server,
+    sessionId,
+    action: "compact",
+  });
+  check(compact.ok === true, `compact failed: ${JSON.stringify(compact)}`);
+  check(compact.compaction?.type === "compaction", "compact did not return the admitted request");
+  const afterCompact = await get(
+    brainUrl,
+    `/api/messages?server=${encodeURIComponent(server)}&sessionId=${encodeURIComponent(sessionId)}&limit=20`,
+  );
+  check(afterCompact.length === beforeBtw.length, "/compact rewrote the stored history");
+  const compactStats = await get(fakeUrl, "/api/test/stats");
+  check(
+    compactStats.data?.compactions?.some((x) => x.sessionID === sessionId),
+    "compact never reached the v2 route",
+  );
+  await waitForState(
+    brainUrl,
+    (s) => s.sessions.find((x) => x.id === sessionId)?.activity?.kind === "compaction",
+    "compact progress was not reflected in the session state",
+  );
+  console.log("compact:", compact.compaction.id.slice(0, 12));
+
   // --- plan hand-off ------------------------------------------------------
   // The chat's "implement" strip appears when a plan turn finishes, then
   // switches the session to build and sends the hand-off prompt.

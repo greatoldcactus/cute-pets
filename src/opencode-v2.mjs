@@ -371,7 +371,14 @@ export class OpenCodeV2Client {
 
   setModel(id, ref) { return this.post(`/api/session/${enc(id)}/model`, { model: ref }); }
   setAgent(id, agent) { return this.post(`/api/session/${enc(id)}/agent`, { agent }); }
-  summarize() { throw new Error("summarize is not implemented for OpenCode 2"); }
+  // Durable compaction request. v2 admits it and reports progress through
+  // session.compaction.* events; an empty body steers by default. Unlike v1's
+  // summarize, the provider/model are not parameters: the server uses the
+  // session model (or agents.compaction.model).
+  compact(id, body = {}) {
+    return this.post(`/api/session/${enc(id)}/compact`, body).then((out) => out?.data ?? null);
+  }
+  summarize() { throw new Error("summarize is not implemented for OpenCode 2; use compact()"); }
   share() { throw new Error("share is not implemented for OpenCode 2"); }
   unshare() { throw new Error("share is not implemented for OpenCode 2"); }
   // Editing history is staged: stage the boundary, prefill the composer, then
@@ -512,6 +519,22 @@ export class OpenCodeV2Client {
           return onEvent({ type: "message.part.updated", properties: { part: { sessionID: sid, type: "text", text: d.text ?? "" } } });
         case "session.status":
           return onEvent({ type: "session.status", properties: { sessionID: sid, status: d.status ?? { type: "idle" } } });
+        // Compaction is admitted asynchronously; the summary appears when the
+        // server reaches a safe point. Keep the reason/input id so the brain can
+        // show progress and refresh the session once the new tokens land.
+        case "session.compaction.started":
+        case "session.compaction.ended":
+        case "session.compaction.failed":
+          return onEvent({
+            type: wrapper.type,
+            properties: {
+              sessionID: sid,
+              reason: d.reason ?? null,
+              inputID: d.inputID ?? null,
+              summary: d.summary ?? null,
+              error: d.error ?? null,
+            },
+          });
         case "form.created":
           return onEvent({ type: "form.created", properties: { form: d.form } });
         case "form.replied":

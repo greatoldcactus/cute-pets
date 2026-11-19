@@ -19,6 +19,7 @@ const forms = new Map(); // id -> pending question
 const inboxes = new Map(); // session id -> Map(inbox id -> pending input)
 const timers = new Map(); // session id -> Set(timeout) for the running turn
 const interrupts = []; // test-only log of interrupt requests
+const compactions = []; // test-only log of compaction requests
 const clients = new Set(); // open SSE responses
 
 const now = () => Date.now();
@@ -297,7 +298,7 @@ const server = http.createServer(async (req, res) => {
 
     if (route === "GET /api/permission/request") return json(res, 200, { data: [] });
     if (route === "GET /api/form") return json(res, 200, { data: [...forms.values()] });
-    if (route === "GET /api/test/stats") return json(res, 200, { data: { interrupts } });
+    if (route === "GET /api/test/stats") return json(res, 200, { data: { interrupts, compactions } });
     if (route === "POST /api/test/form") {
       const body = await readBody(req);
       const form = {
@@ -494,6 +495,38 @@ const server = http.createServer(async (req, res) => {
         // Transient side question: deliberately does not touch messages.
         await readBody(req);
         return json(res, 200, { data: { text: "A concise side answer." } });
+      }
+      if (action === "compact" && req.method === "POST") {
+        // v2 admits a durable compaction request and reports progress through
+        // events. The stub finishes immediately and leaves the history alone,
+        // which is what the brain relies on: the summary is not a chat message.
+        const body = await readBody(req);
+        const compaction = {
+          id: body.id ?? newID("msg"),
+          sessionID: session.id,
+          time: { created: now() },
+          type: "compaction",
+          payload: {},
+          delivery: body.delivery ?? "steer",
+        };
+        compactions.push({
+          sessionID: session.id,
+          id: compaction.id,
+          reason: "manual",
+          delivery: compaction.delivery,
+        });
+        broadcast("session.compaction.started", {
+          sessionID: session.id,
+          reason: "manual",
+          inputID: compaction.id,
+        });
+        broadcast("session.compaction.ended", {
+          sessionID: session.id,
+          reason: "manual",
+          inputID: compaction.id,
+          summary: "Fake summary.",
+        });
+        return json(res, 200, { data: compaction });
       }
       if (action === "prompt" && req.method === "POST") {
         const admitted = prompt(session, await readBody(req));

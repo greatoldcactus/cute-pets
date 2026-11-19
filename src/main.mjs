@@ -502,6 +502,39 @@ class Hub {
       case "session.activity":
         if (p.sessionID && p.activity) this.store.noteActivity(url, p.sessionID, p.activity);
         break;
+      case "session.compaction.started":
+        if (p.sessionID) {
+          this.store.noteActivity(url, p.sessionID, {
+            kind: "compaction",
+            text: p.reason === "auto" ? "summarizing automatically" : "summarizing this conversation",
+            status: "running",
+          });
+        }
+        break;
+      case "session.compaction.ended": {
+        if (!p.sessionID) break;
+        this.store.noteActivity(url, p.sessionID, {
+          kind: "compaction",
+          text: "conversation summarized",
+          status: "completed",
+        });
+        // The summary replaces the request context; the session's tokens and
+        // cost change with it. Pull the fresh session so the face updates as
+        // soon as compaction finishes rather than at the next periodic sync.
+        const entry = this.clients.get(url);
+        if (entry?.client?.getSession) {
+          void entry.client
+            .getSession(p.sessionID)
+            .then((info) => { if (info) this.store.upsertSession(url, info); })
+            .catch(() => {});
+        }
+        break;
+      }
+      case "session.compaction.failed":
+        if (p.sessionID) {
+          this.store.setError(url, p.sessionID, p.error?.message ?? "compaction failed");
+        }
+        break;
       case "form.created":
         if (p.form?.id && p.form?.sessionID) {
           this.store.upsertSession(url, { id: p.form.sessionID });
@@ -775,6 +808,11 @@ class Hub {
         return { ok: true, directory: dir, session };
       }
       case "compact": {
+        if (client.version === "2") {
+          if (typeof client.compact !== "function") throw new Error("compaction is not supported by this server");
+          const compaction = await client.compact(sessionId);
+          return { ok: true, compaction };
+        }
         const model = rec?.model;
         if (!model?.id || !model?.providerID) throw new Error("session has no model to summarize with");
         await client.summarize(sessionId, model.providerID, model.id);

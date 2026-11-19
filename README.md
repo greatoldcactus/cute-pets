@@ -348,8 +348,9 @@ the child's "… (fork #N)" title shows at once), `/model`/`/agent` use the v2 s
 routes, `/cd` uses `POST /api/session/{id}/move`, undo/redo use
 `revert/stage` + `revert/commit` / `DELETE revert`, aggregate totals use
 `/api/experimental/session/stats?tools=none`, `/btw` uses
-`POST /api/session/{id}/generate` for transient context-only answers, and `/compact`/`/share`
-are **not wired for v2**.
+`POST /api/session/{id}/generate` for transient context-only answers, `/compact` uses
+`POST /api/session/{id}/compact` (the summary is written asynchronously), and `/share`
+is **not wired for v2**.
 
 ---
 
@@ -437,7 +438,7 @@ POST /api/session/close    {server, sessionId}   — delete in OpenCode, remove 
 
 ## Limitations
 
-- OpenCode 2: compact and share are v1-only; fork (including `before`), model/agent switch,
+- OpenCode 2: share is v1-only; fork (including `before`), model/agent switch, compaction,
   moving a session between directories (`/cd`), and undo/redo (stage/clear) work on v2.
 - `/btw` needs OpenCode 2's transient generate endpoint; on v1 it reports that side
   questions need OpenCode 2.
